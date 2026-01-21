@@ -134,7 +134,7 @@ ${BOLD}Usage:${NC}
     ralph <feature-name> [options]      Run loop for feature (legacy)
 
 ${BOLD}Commands:${NC}
-    start           Auto-select a feature based on dependencies and run
+    start           Auto-select a feature based on status and run
 
 ${BOLD}Options:${NC}
     --feature <name>        Lock to specific feature (with start command)
@@ -180,7 +180,6 @@ build_features_index() {
             local story_count=$(jq '.userStories | length' "$prd_file")
             local completed_count=$(jq '[.userStories[] | select(.passes == true)] | length' "$prd_file")
             local failed_count=$(jq '[.userStories[] | select(.status == "failed")] | length' "$prd_file")
-            local dependencies=$(jq -r '.dependencies // []' "$prd_file")
 
             # Determine status
             local status="pending"
@@ -195,7 +194,6 @@ build_features_index() {
                 --arg name "$name" \
                 --arg description "$description" \
                 --arg status "$status" \
-                --argjson dependencies "$dependencies" \
                 --argjson storyCount "$story_count" \
                 --argjson completedCount "$completed_count" \
                 --argjson failedCount "$failed_count" \
@@ -203,7 +201,6 @@ build_features_index() {
                     name: $name,
                     description: $description,
                     status: $status,
-                    dependencies: $dependencies,
                     storyCount: $storyCount,
                     completedCount: $completedCount,
                     failedCount: $failedCount
@@ -217,8 +214,8 @@ build_features_index() {
     echo "{\"features\": $features_array}" | jq '.' > "$index_file"
 }
 
-# Auto-select feature based on dependencies and status
-auto_select_feature() {
+# Claude-based feature selection
+claude_select_feature() {
     build_features_index
 
     if [[ ! -f "$FEATURES_INDEX" ]]; then
@@ -226,62 +223,41 @@ auto_select_feature() {
         exit 1
     fi
 
-    # Get all non-completed features
-    local candidates=$(jq -r '.features[] | select(.status != "completed") | .name' "$FEATURES_INDEX")
-
-    if [[ -z "$candidates" ]]; then
+    # Check if all features are complete
+    local non_completed=$(jq -r '.features[] | select(.status != "completed") | .name' "$FEATURES_INDEX")
+    if [[ -z "$non_completed" ]]; then
         log_success "All features are complete!"
         exit 0
     fi
 
-    # Find a feature whose dependencies are all completed
-    for feature in $candidates; do
-        local deps=$(jq -r --arg name "$feature" '.features[] | select(.name == $name) | .dependencies[]?' "$FEATURES_INDEX")
-        local all_deps_met=true
+    log_info "Analyzing features..."
 
-        if [[ -n "$deps" ]]; then
-            for dep in $deps; do
-                local dep_status=$(jq -r --arg name "$dep" '.features[] | select(.name == $name) | .status' "$FEATURES_INDEX")
-                if [[ "$dep_status" != "completed" ]]; then
-                    all_deps_met=false
-                    break
-                fi
-            done
-        fi
+    # Run Claude with feature selector prompt
+    local selector_prompt="$SCRIPT_DIR/feature-selector-prompt.md"
+    if [[ ! -f "$selector_prompt" ]]; then
+        log_error "Feature selector prompt not found: $selector_prompt"
+        exit 1
+    fi
 
-        if [[ "$all_deps_met" == "true" ]]; then
-            # Prefer in_progress features, then pending
-            local status=$(jq -r --arg name "$feature" '.features[] | select(.name == $name) | .status' "$FEATURES_INDEX")
-            if [[ "$status" == "in_progress" ]]; then
-                echo "$feature"
-                return
-            fi
-        fi
-    done
+    local prompt_content=$(cat "$selector_prompt")
+    local output=$(claude --print -p "$prompt_content" 2>&1) || true
 
-    # If no in_progress feature with met dependencies, pick first pending with met deps
-    for feature in $candidates; do
-        local deps=$(jq -r --arg name "$feature" '.features[] | select(.name == $name) | .dependencies[]?' "$FEATURES_INDEX")
-        local all_deps_met=true
+    # Extract selected feature from <selected>...</selected> tags
+    local selected=$(echo "$output" | grep -oP '(?<=<selected>)[^<]+(?=</selected>)' | head -1)
 
-        if [[ -n "$deps" ]]; then
-            for dep in $deps; do
-                local dep_status=$(jq -r --arg name "$dep" '.features[] | select(.name == $name) | .status' "$FEATURES_INDEX")
-                if [[ "$dep_status" != "completed" ]]; then
-                    all_deps_met=false
-                    break
-                fi
-            done
-        fi
+    if [[ -z "$selected" ]]; then
+        log_error "Claude did not select a feature"
+        log_error "Output: $output"
+        exit 1
+    fi
 
-        if [[ "$all_deps_met" == "true" ]]; then
-            echo "$feature"
-            return
-        fi
-    done
+    # Validate feature exists
+    if [[ ! -d "$SCRIPT_DIR/features/$selected" ]]; then
+        log_error "Selected feature '$selected' does not exist"
+        exit 1
+    fi
 
-    # Fallback: just pick the first non-completed feature
-    echo "$candidates" | head -1
+    echo "$selected"
 }
 
 # Validate feature exists
@@ -555,13 +531,12 @@ main() {
 
     # Handle start command with auto-selection
     if [[ "$COMMAND" == "start" ]] && [[ "$AUTO_SELECT_FEATURE" == "true" ]] && [[ -z "$FEATURE_NAME" ]]; then
-        log_info "Auto-selecting feature..."
-        FEATURE_NAME=$(auto_select_feature)
+        FEATURE_NAME=$(claude_select_feature)
         if [[ -z "$FEATURE_NAME" ]]; then
             log_error "No eligible features found"
             exit 1
         fi
-        log_success "Selected feature: $FEATURE_NAME"
+        log_success "Selected: $FEATURE_NAME"
     fi
 
     # Validate feature name provided
