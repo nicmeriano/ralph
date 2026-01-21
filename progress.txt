@@ -1,4 +1,0 @@
-# Ralph Loop Progress Log
-# This file is append-only. Each iteration adds learnings here.
-# Format: Timestamped entries with story ID, status, and learnings.
-

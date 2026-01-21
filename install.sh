@@ -24,7 +24,6 @@ RALPH_HOME="$HOME/.ralph"
 BIN_DIR="$HOME/.local/bin"
 SKILL_DIR_PLAN="$HOME/.claude/skills/ralph-plan"
 SKILL_DIR_START="$HOME/.claude/skills/ralph-start"
-SKILL_DIR_START_ONCE="$HOME/.claude/skills/ralph-start-once"
 
 # Create directories
 echo -e "${BLUE}[1/6]${NC} Creating directories..."
@@ -33,7 +32,6 @@ mkdir -p "$RALPH_HOME/dashboard"
 mkdir -p "$BIN_DIR"
 mkdir -p "$SKILL_DIR_PLAN"
 mkdir -p "$SKILL_DIR_START"
-mkdir -p "$SKILL_DIR_START_ONCE"
 
 # ============================================================================
 # Create ralph CLI command
@@ -845,16 +843,72 @@ When generating features for a new project (no existing features):
 
 This is required because Ralph needs git, verification scripts, and hooks to function.
 
-## Task Sizing Rules (CRITICAL)
+## Ask Clarifying Questions
 
-**Per-Feature Limits:**
-- **4-12 tasks per feature** (not fewer, not more)
+Before generating, ask questions using **lettered options** for quick responses (e.g., "1A, 2C"):
 
-**Per-Task Limits:**
+```
+1. What is the primary goal?
+   A. New greenfield project
+   B. Add feature to existing codebase
+   C. Refactor existing code
+   D. Other: [please specify]
+
+2. What tech stack are you using?
+   A. Next.js + TypeScript
+   B. Node.js + Express
+   C. Python + FastAPI
+   D. Other: [please specify]
+```
+
+## Task Sizing: The Number One Rule
+
+**Each task must be completable in ONE Ralph iteration (one context window).**
+
+Ralph spawns a fresh Claude instance per iteration with no memory of previous work.
+
+### Right-sized tasks:
+- Add a database column and migration
+- Add a UI component to an existing page
+- Create a single API endpoint
+
+### Too big (split these):
+- "Build the entire dashboard" → Split into: schema, queries, UI, filters
+- "Add authentication" → Split into: schema, middleware, login UI, session
+
+**Rule of thumb:** If you cannot describe the change in 2-3 sentences, it is too big.
+
+### Per-Feature Limits:
+- **4-12 tasks per feature**
+
+### Per-Task Limits:
 - **Max 4 acceptance criteria** per task
-- **Max 4 files touched** per task (use `estimatedFiles` field)
+- **Max 4 files touched** per task
 
-**Split Pattern:** model → API → UI → tests
+**Split Pattern:** model/schema → API/backend → UI/frontend → tests
+
+## Acceptance Criteria: Must Be Verifiable
+
+### Good criteria:
+- "Add `status` column to tasks table with default 'pending'"
+- "Filter dropdown has options: All, Active, Completed"
+- "Typecheck passes"
+
+### Bad criteria:
+- "Works correctly"
+- "Good UX"
+- "Handles edge cases"
+
+**Always include** "Typecheck passes" for TypeScript projects.
+
+## Task Ordering
+
+Tasks execute in order. Earlier tasks must not depend on later ones.
+
+**Correct order:**
+1. Schema/database changes
+2. Server actions / backend logic
+3. UI components that use the backend
 
 ## PRD Schema
 
@@ -940,31 +994,10 @@ description: Start the Ralph development loop. Auto-selects a feature or specify
 4. Skip completed
 SKILL_MD
 
-# /ralph:start-once skill
-cat > "$SKILL_DIR_START_ONCE/SKILL.md" << 'SKILL_MD'
----
-name: ralph:start-once
-description: Run a single Ralph iteration. Useful for debugging or manual control.
----
-
-# /ralph:start-once - Single Ralph Iteration
-
-## Usage
-
-- `/ralph:start-once` - Auto-select feature, single iteration
-- `/ralph:start-once my-feature` - Single iteration on specific feature
-
-## Execution
-
-1. **Verify Ralph is initialized**: Check `.ralph/` exists
-2. **Run single iteration**:
-   - With feature: `.ralph/ralph.sh start --feature <name> --once`
-   - Auto-select: `.ralph/ralph.sh start --once`
-SKILL_MD
-
-echo -e "${BLUE}[6/6]${NC} Cleaning up old skill if exists..."
-# Remove old ralph-features skill if it exists
+echo -e "${BLUE}[6/6]${NC} Cleaning up old skills if they exist..."
+# Remove old skills if they exist
 rm -rf "$HOME/.claude/skills/ralph-features" 2>/dev/null || true
+rm -rf "$HOME/.claude/skills/ralph-start-once" 2>/dev/null || true
 
 # ============================================================================
 # Done!
@@ -1001,7 +1034,9 @@ echo ""
 echo -e "${BOLD}Claude Skills:${NC}"
 echo "  /ralph:plan                        Generate features from a plan"
 echo "  /ralph:start                       Start the development loop"
-echo "  /ralph:start-once                  Run a single iteration"
+echo ""
+echo -e "${BOLD}Options:${NC}"
+echo "  --once                             Run a single iteration"
 echo ""
 echo -e "${BOLD}File Structure:${NC}"
 echo "  .ralph/features/<name>.prd.json    Flat PRD files"

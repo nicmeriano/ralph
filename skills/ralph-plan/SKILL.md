@@ -127,8 +127,7 @@ When generating features for a **new project** (no existing `.ralph/features/` o
         "Pre-commit hook is installed and executable",
         "Hook runs lint on staged files",
         "Hook runs typecheck before commit",
-        "Hook runs tests before commit",
-        "Commit is blocked if any verification fails"
+        "Hook runs tests before commit"
       ],
       "estimatedFiles": 2,
       "passes": false,
@@ -200,24 +199,67 @@ Extract features and tasks from the plan using these patterns:
 
 ### 3. Ask Clarifying Questions
 
-Before generating, ask about:
+Before generating, ask clarifying questions using **lettered options** so users can respond quickly (e.g., "1A, 2C, 3B"):
+
+**Example questions:**
+
+```
+1. What is the primary goal?
+   A. New greenfield project
+   B. Add feature to existing codebase
+   C. Refactor existing code
+   D. Other: [please specify]
+
+2. What tech stack are you using?
+   A. Next.js + TypeScript
+   B. Node.js + Express
+   C. Python + FastAPI
+   D. Other: [please specify]
+
+3. How should we handle authentication?
+   A. JWT tokens with refresh
+   B. Session-based auth
+   C. OAuth only (social login)
+   D. Skip for now, add later
+```
+
+Also ask about:
 - **Ambiguous scope**: "Should X be part of feature A or B?"
 - **Missing criteria**: "What defines 'done' for this task?"
 - **Task sizing**: "This seems large - should we split it?"
 
-### 4. Task Sizing Rules (CRITICAL)
+## Task Sizing: The Number One Rule
 
-**Per-Feature Limits:**
+**Each task must be completable in ONE Ralph iteration (one context window).**
+
+Ralph spawns a fresh Claude instance per iteration with no memory of previous work. If a task is too big, the LLM runs out of context before finishing.
+
+### Right-sized tasks:
+- Add a database column and migration
+- Add a UI component to an existing page
+- Update a server action with new logic
+- Add a filter dropdown to a list
+- Create a single API endpoint
+
+### Too big (split these):
+- "Build the entire dashboard" → Split into: schema, queries, UI, filters
+- "Add authentication" → Split into: schema, middleware, login UI, session
+- "Refactor the API" → Split into one task per endpoint
+- "Create user management" → Split into: model, CRUD API, list UI, detail UI
+
+**Rule of thumb:** If you cannot describe the change in 2-3 sentences, it is too big.
+
+### Per-Feature Limits:
 - **4-12 tasks per feature** (not fewer, not more)
 - If a feature has fewer than 4 tasks, consider combining with another feature
 - If a feature has more than 12 tasks, split into multiple features
 
-**Per-Task Limits:**
+### Per-Task Limits:
 - **Max 4 acceptance criteria** per task
 - **Max 4 files touched** per task (use `estimatedFiles` field)
 - If a task exceeds these, split it
 
-**Split Pattern:**
+### Split Pattern:
 When splitting large tasks, follow this layer order:
 1. model/schema →
 2. API/backend →
@@ -228,7 +270,41 @@ When splitting large tasks, follow this layer order:
 - "Build user authentication" → Split into: "Create User model", "Create login API", "Create login UI", "Add auth tests"
 - "Add dashboard" → Split into: "Create dashboard layout", "Add dashboard widgets", "Connect dashboard to API"
 
-### 5. Category Assignment
+## Acceptance Criteria: Must Be Verifiable
+
+### Good criteria (verifiable):
+- "Add `status` column to tasks table with default 'pending'"
+- "Filter dropdown has options: All, Active, Completed"
+- "Clicking delete shows confirmation dialog"
+- "POST /api/tasks returns 201 with task object"
+- "Typecheck passes"
+
+### Bad criteria (vague):
+- "Works correctly"
+- "User can do X easily"
+- "Good UX"
+- "Handles edge cases"
+- "Is performant"
+
+### Always include:
+- "Typecheck passes" for every task (if using TypeScript)
+- "Verify in browser using dev-browser skill" for UI tasks
+
+## Task Ordering
+
+Tasks execute in order. Earlier tasks must not depend on later ones.
+
+**Correct order:**
+1. Schema/database changes (migrations)
+2. Server actions / backend logic
+3. UI components that use the backend
+4. Dashboard/summary views that aggregate data
+
+**Wrong order:**
+1. UI component (depends on schema that doesn't exist yet)
+2. Schema change
+
+### Category Assignment
 
 Assign categories based on the work type:
 - `core` - Core business logic, models, schemas
@@ -238,7 +314,7 @@ Assign categories based on the work type:
 - `testing` - Test files, test utilities
 - `config` - Configuration, setup, infrastructure
 
-### 6. Dependency Management
+### Dependency Management
 
 Set the `dependencies` array to list features that must be completed first:
 
@@ -335,9 +411,9 @@ When `/ralph:plan` is invoked:
 
 3. **Check for New Project**: If `.ralph/features/` is empty or doesn't exist, prepare to include `project-setup` feature first
 
-4. **Present Summary**: Show detected features and task count
+4. **Ask Clarifying Questions**: Use lettered options for quick responses
 
-5. **Ask Questions**: Clarify any ambiguities
+5. **Present Summary**: Show detected features and task count
 
 6. **Generate Files** (FLAT STRUCTURE):
    ```
@@ -353,12 +429,12 @@ When `/ralph:plan` is invoked:
    ```
    Created 2 features from plan:
 
-   📄 .ralph/features/project-setup.prd.json
+   project-setup.prd.json
       - 5 tasks (required for new projects)
       - Dependencies: none
       - Categories: config
 
-   📄 .ralph/features/auth-system.prd.json
+   auth-system.prd.json
       - 6 tasks
       - Dependencies: project-setup
       - Categories: core, api, ui
@@ -377,9 +453,9 @@ When `/ralph:plan` is invoked:
      2. auth-system (6 tasks) - Depends on: project-setup
 
    Options:
-     • /ralph:start              - Auto-select and run loop
-     • /ralph:start auth-system  - Start specific feature
-     • Skip for now              - Just generate files
+     - /ralph:start              - Auto-select and run loop
+     - /ralph:start auth-system  - Start specific feature
+     - Skip for now              - Just generate files
    ```
 
    If the user chooses to start:
@@ -387,44 +463,35 @@ When `/ralph:plan` is invoked:
    - This runs the loop within the current Claude session
    - No need to exit Claude and run manually
 
-## Example Transformation
+## Example: Task Status Feature
+
+This example shows properly sized tasks with verifiable criteria:
 
 **Input Plan:**
 ```markdown
-## Phase 1: Authentication
-
-### Task 1.1: User Model
-Create the user model with email and password fields.
-- [ ] Create User schema
-- [ ] Add password hashing
-- [ ] Add validation
-
-### Task 1.2: Login API
-Implement login endpoint.
-- [ ] POST /api/login endpoint
-- [ ] JWT token generation
-- [ ] Error handling
+Add task status tracking with filtering
 ```
 
-**Output PRD** (saved to `.ralph/features/authentication.prd.json`):
+**Output PRD** (saved to `.ralph/features/task-status.prd.json`):
 ```json
 {
-  "name": "authentication",
-  "branchName": "ralph/authentication",
-  "description": "User authentication system with login functionality",
+  "name": "task-status",
+  "branchName": "ralph/task-status",
+  "description": "Add status field to tasks with filtering capability",
   "dependencies": ["project-setup"],
   "createdAt": "2026-01-21T10:00:00Z",
   "updatedAt": "2026-01-21T10:00:00Z",
   "tasks": [
     {
       "id": "T-001",
-      "title": "Create User model",
-      "description": "Create User schema with email and password fields, including hashing and validation",
+      "title": "Add status column to tasks table",
+      "description": "Add status enum column with migration",
       "category": "core",
       "acceptanceCriteria": [
-        "User schema exists with email and password fields",
-        "Passwords are hashed before storage",
-        "Email validation is enforced"
+        "Migration adds status column to tasks table",
+        "Status column has type enum('pending', 'in_progress', 'completed')",
+        "Default value is 'pending'",
+        "Typecheck passes"
       ],
       "estimatedFiles": 2,
       "passes": false,
@@ -436,13 +503,52 @@ Implement login endpoint.
     },
     {
       "id": "T-002",
-      "title": "Create Login API",
-      "description": "Implement login endpoint with JWT token generation",
+      "title": "Update task server actions for status",
+      "description": "Add updateStatus action and include status in queries",
       "category": "api",
       "acceptanceCriteria": [
-        "POST /api/login endpoint exists",
-        "Valid credentials return JWT token",
-        "Invalid credentials return 401 error"
+        "updateTaskStatus(id, status) action exists",
+        "getTasks() returns status field",
+        "getTaskById() returns status field",
+        "Typecheck passes"
+      ],
+      "estimatedFiles": 1,
+      "passes": false,
+      "status": "pending",
+      "notes": "",
+      "failureCount": 0,
+      "lastFailureReason": "",
+      "completedAt": null
+    },
+    {
+      "id": "T-003",
+      "title": "Add status badge to task list items",
+      "description": "Display status as colored badge in task rows",
+      "category": "ui",
+      "acceptanceCriteria": [
+        "TaskRow component shows status badge",
+        "Badge color: gray=pending, blue=in_progress, green=completed",
+        "Badge is clickable to cycle status",
+        "Typecheck passes"
+      ],
+      "estimatedFiles": 2,
+      "passes": false,
+      "status": "pending",
+      "notes": "",
+      "failureCount": 0,
+      "lastFailureReason": "",
+      "completedAt": null
+    },
+    {
+      "id": "T-004",
+      "title": "Add status filter dropdown",
+      "description": "Dropdown to filter tasks by status",
+      "category": "ui",
+      "acceptanceCriteria": [
+        "Filter dropdown above task list",
+        "Options: All, Pending, In Progress, Completed",
+        "Selecting filter updates displayed tasks",
+        "Typecheck passes"
       ],
       "estimatedFiles": 2,
       "passes": false,
@@ -454,18 +560,18 @@ Implement login endpoint.
     }
   ],
   "metadata": {
-    "totalTasks": 2,
+    "totalTasks": 4,
     "completedTasks": 0,
     "failedTasks": 0,
     "currentIteration": 0,
-    "maxIterations": 3
+    "maxIterations": 6
   }
 }
 ```
 
 ## Notes
 
-- **Task order is NOT execution order** - Ralph autonomously decides priority
+- **Task order matters** - Ralph executes tasks in order, respect dependencies
 - **Flat file structure** - PRDs are saved as `<feature-name>.prd.json` directly in features/
 - **Cumulative progress** - Single `progress.txt` file shared across all features
 - Calculate `maxIterations` as `totalTasks * 1.5`

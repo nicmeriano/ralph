@@ -14,48 +14,56 @@ curl -fsSL https://raw.githubusercontent.com/nicomeriano/ralph/main/install.sh |
 # Initialize Ralph in your project
 ralph init
 
-# Run the development loop for a feature
-ralph my-feature
+# Run the development loop (auto-selects feature)
+ralph start
+
+# Run for a specific feature
+ralph start --feature my-feature
 
 # Single iteration only
-ralph my-feature --once
+ralph start --once
 
 # Custom settings
-ralph my-feature --max-iterations 15 --port 4000
+ralph start --feature my-feature --max-iterations 15 --port 4000
 ```
 
 ## How It Works
 
 1. **Create a plan** in Claude Code
-2. **Run `/ralph-features`** to convert the plan into features with user stories
-3. **Run `ralph <feature>`** to start the autonomous loop
-4. **Watch the dashboard** as Ralph completes stories one by one
+2. **Run `/ralph:plan`** to convert the plan into features with tasks
+3. **Run `/ralph:start`** or `ralph start` to begin the autonomous loop
+4. **Watch the dashboard** as Ralph completes tasks one by one
+
+## Claude Skills
+
+| Skill | Description |
+|-------|-------------|
+| `/ralph:plan` | Convert plans into Ralph features with properly sized tasks |
+| `/ralph:start` | Start the autonomous development loop |
+
+Use `--once` flag with `/ralph:start` for single iteration mode.
 
 ## Project Structure
 
 ```
 .ralph/
 ├── features/                    # All features being worked on
-│   └── my-feature/
-│       ├── prd.json            # Stories for this feature
-│       └── progress.txt        # Learning log
+│   ├── my-feature.prd.json     # PRD for this feature (flat structure)
+│   └── progress.txt            # Cumulative learning log
 ├── ralph.sh                     # Main loop script
-├── ralph-once.sh               # Single iteration wrapper
-├── prompt.md                   # Agent instructions
-├── config.json                 # Configuration
-├── dashboard/
-│   └── index.html              # Real-time progress dashboard
-└── templates/
-    ├── prd.template.json       # Template for new features
-    └── progress.template.txt   # Template for progress files
+├── prompt.md                    # Agent instructions
+├── config.json                  # Configuration
+└── dashboard/
+    └── index.html              # Real-time progress dashboard
 ```
 
 ## CLI Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--feature <name>` | auto-select | Specify feature to work on |
 | `--once` | false | Run single iteration |
-| `--max-iterations N` | stories × 1.5 | Max loop iterations |
+| `--max-iterations N` | tasks × 1.5 | Max loop iterations |
 | `--sandbox` | true | Run in Docker sandbox |
 | `--port N` | 3456 | Dashboard port |
 | `--no-dashboard` | false | Don't auto-start dashboard |
@@ -74,16 +82,6 @@ Edit `.ralph/config.json`:
   "createPROnCompletion": true
 }
 ```
-
-## Claude Skill
-
-The `/ralph-features` skill converts Claude Code plans into Ralph features:
-
-- Parses `## Phase N: Name` as features
-- Parses `### Task N.N: Title` as user stories
-- Parses `- [ ] Item` as acceptance criteria
-- Asks clarifying questions if needed
-- Generates proper PRD structure
 
 ## Requirements
 
