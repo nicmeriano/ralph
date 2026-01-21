@@ -1,0 +1,22 @@
+{
+  "sandbox": true,
+  "dashboardPort": 3456,
+  "dashboardAutoStart": true,
+  "maxIterationsMultiplier": 1.5,
+  "claudeModel": "sonnet",
+  "claudePermissionMode": "acceptEdits",
+  "commitPrefix": "feat",
+  "coAuthor": "Ralph Loop <ralph@loop.dev>",
+  "testCommands": {
+    "default": "npm test",
+    "typecheck": "npm run typecheck",
+    "lint": "npm run lint"
+  },
+  "createPROnCompletion": true,
+  "browserTesting": {
+    "enabled": false,
+    "devServerCommand": "npm run dev",
+    "devServerPort": 3000,
+    "waitForServerMs": 5000
+  }
+}

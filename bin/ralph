@@ -1,0 +1,110 @@
+#!/bin/bash
+# Ralph 2.0 CLI
+
+set -e
+
+RALPH_HOME="$HOME/.ralph"
+
+show_help() {
+    cat << EOF
+Ralph 2.0 - Autonomous Development Loop
+
+Usage:
+    ralph init                              Initialize .ralph/ in current project
+    ralph start                             Auto-select feature and run loop
+    ralph start --feature <name>            Run loop for specific feature
+    ralph <feature-name> [options]          Run loop for feature (legacy)
+
+Commands:
+    init            Initialize .ralph/ directory in current project
+    start           Auto-select a feature based on dependencies and run
+    <feature>       Run the development loop for the specified feature (legacy)
+
+Options:
+    --feature <name>        Lock to specific feature (with start command)
+    --once                  Run single iteration only
+    --max-iterations N      Set maximum iterations (default: tasks * 1.5)
+    --port N                Dashboard port (default: 3456)
+    --sandbox true|false    Enable/disable Docker sandbox (default: true)
+    --no-dashboard          Don't auto-start the dashboard
+    -h, --help              Show this help message
+
+Examples:
+    ralph init
+    ralph start                         # Auto-select feature
+    ralph start --feature auth-system   # Run specific feature
+    ralph auth-feature                  # Legacy syntax
+    ralph auth-feature --once
+    ralph auth-feature --max-iterations 15
+
+For more info: https://github.com/<repo>
+EOF
+}
+
+init_ralph() {
+    if [[ -d ".ralph" ]]; then
+        echo "Ralph already initialized in this project (.ralph/ exists)"
+        exit 1
+    fi
+
+    echo "Initializing Ralph in $(pwd)..."
+
+    # Create directory structure
+    mkdir -p .ralph/features
+    mkdir -p .ralph/dashboard
+    mkdir -p .ralph/templates
+
+    # Copy templates from global installation
+    if [[ -d "$RALPH_HOME" ]]; then
+        cp "$RALPH_HOME/ralph.sh" .ralph/
+        cp "$RALPH_HOME/ralph-once.sh" .ralph/
+        cp "$RALPH_HOME/prompt.md" .ralph/
+        cp "$RALPH_HOME/feature-selector-prompt.md" .ralph/
+        cp "$RALPH_HOME/config.json" .ralph/
+        cp "$RALPH_HOME/dashboard/index.html" .ralph/dashboard/
+        cp "$RALPH_HOME/templates/"* .ralph/templates/
+
+        # Create cumulative progress file
+        cp "$RALPH_HOME/templates/progress.template.txt" .ralph/features/progress.txt
+
+        chmod +x .ralph/ralph.sh
+        chmod +x .ralph/ralph-once.sh
+    else
+        echo "Error: Ralph templates not found at $RALPH_HOME"
+        echo "Please reinstall Ralph"
+        exit 1
+    fi
+
+    echo ""
+    echo "Ralph initialized successfully!"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Use /ralph:plan in Claude Code to generate features from a plan"
+    echo "  2. Or manually create: .ralph/features/my-feature.prd.json"
+    echo "  3. Run: ralph start --feature my-feature"
+    echo ""
+}
+
+# Main logic
+case "${1:-}" in
+    "")
+        show_help
+        exit 0
+        ;;
+    "init")
+        init_ralph
+        ;;
+    "-h"|"--help")
+        show_help
+        exit 0
+        ;;
+    *)
+        # Run the feature loop
+        if [[ ! -f ".ralph/ralph.sh" ]]; then
+            echo "Error: Not a Ralph project (no .ralph/ralph.sh found)"
+            echo "Run 'ralph init' first"
+            exit 1
+        fi
+        exec .ralph/ralph.sh "$@"
+        ;;
+esac

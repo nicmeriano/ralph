@@ -277,7 +277,6 @@ When splitting large tasks, follow this layer order:
 - "Filter dropdown has options: All, Active, Completed"
 - "Clicking delete shows confirmation dialog"
 - "POST /api/tasks returns 201 with task object"
-- "Typecheck passes"
 
 ### Bad criteria (vague):
 - "Works correctly"
@@ -286,9 +285,10 @@ When splitting large tasks, follow this layer order:
 - "Handles edge cases"
 - "Is performant"
 
-### Always include:
-- "Typecheck passes" for every task (if using TypeScript)
-- "Verify in browser using dev-browser skill" for UI tasks
+### Note on verification:
+- Typecheck, lint, and tests run automatically via pre-commit hooks (set up in project-setup)
+- For UI tasks, include "Verify in browser" when visual confirmation is needed
+- Focus acceptance criteria on business logic and observable behavior
 
 ## Task Ordering
 
@@ -490,8 +490,7 @@ Add task status tracking with filtering
       "acceptanceCriteria": [
         "Migration adds status column to tasks table",
         "Status column has type enum('pending', 'in_progress', 'completed')",
-        "Default value is 'pending'",
-        "Typecheck passes"
+        "Default value is 'pending'"
       ],
       "estimatedFiles": 2,
       "passes": false,
@@ -509,8 +508,7 @@ Add task status tracking with filtering
       "acceptanceCriteria": [
         "updateTaskStatus(id, status) action exists",
         "getTasks() returns status field",
-        "getTaskById() returns status field",
-        "Typecheck passes"
+        "getTaskById() returns status field"
       ],
       "estimatedFiles": 1,
       "passes": false,
@@ -528,8 +526,7 @@ Add task status tracking with filtering
       "acceptanceCriteria": [
         "TaskRow component shows status badge",
         "Badge color: gray=pending, blue=in_progress, green=completed",
-        "Badge is clickable to cycle status",
-        "Typecheck passes"
+        "Badge is clickable to cycle status"
       ],
       "estimatedFiles": 2,
       "passes": false,
@@ -547,8 +544,7 @@ Add task status tracking with filtering
       "acceptanceCriteria": [
         "Filter dropdown above task list",
         "Options: All, Pending, In Progress, Completed",
-        "Selecting filter updates displayed tasks",
-        "Typecheck passes"
+        "Selecting filter updates displayed tasks"
       ],
       "estimatedFiles": 2,
       "passes": false,

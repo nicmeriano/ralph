@@ -1,0 +1,34 @@
+{
+  "name": "{{FEATURE_NAME}}",
+  "branchName": "ralph/{{FEATURE_NAME}}",
+  "description": "Feature description goes here",
+  "dependencies": [],
+  "createdAt": "{{CREATED_AT}}",
+  "updatedAt": "{{CREATED_AT}}",
+  "tasks": [
+    {
+      "id": "T-001",
+      "title": "Task title",
+      "description": "What this task accomplishes",
+      "category": "core",
+      "acceptanceCriteria": [
+        "Criterion 1",
+        "Criterion 2"
+      ],
+      "estimatedFiles": 2,
+      "passes": false,
+      "status": "pending",
+      "notes": "",
+      "failureCount": 0,
+      "lastFailureReason": "",
+      "completedAt": null
+    }
+  ],
+  "metadata": {
+    "totalTasks": 1,
+    "completedTasks": 0,
+    "failedTasks": 0,
+    "currentIteration": 0,
+    "maxIterations": 2
+  }
+}
