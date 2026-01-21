@@ -22,19 +22,23 @@ echo ""
 # Installation directories
 RALPH_HOME="$HOME/.ralph"
 BIN_DIR="$HOME/.local/bin"
-SKILL_DIR="$HOME/.claude/skills/ralph-features"
+SKILL_DIR_PLAN="$HOME/.claude/skills/ralph-plan"
+SKILL_DIR_START="$HOME/.claude/skills/ralph-start"
+SKILL_DIR_START_ONCE="$HOME/.claude/skills/ralph-start-once"
 
 # Create directories
-echo -e "${BLUE}[1/5]${NC} Creating directories..."
+echo -e "${BLUE}[1/6]${NC} Creating directories..."
 mkdir -p "$RALPH_HOME/templates"
 mkdir -p "$RALPH_HOME/dashboard"
 mkdir -p "$BIN_DIR"
-mkdir -p "$SKILL_DIR"
+mkdir -p "$SKILL_DIR_PLAN"
+mkdir -p "$SKILL_DIR_START"
+mkdir -p "$SKILL_DIR_START_ONCE"
 
 # ============================================================================
 # Create ralph CLI command
 # ============================================================================
-echo -e "${BLUE}[2/5]${NC} Installing ralph CLI..."
+echo -e "${BLUE}[2/6]${NC} Installing ralph CLI..."
 
 cat > "$BIN_DIR/ralph" << 'RALPH_CLI'
 #!/bin/bash
@@ -119,7 +123,7 @@ init_ralph() {
     echo "  3. Edit the PRD with your stories"
     echo "  4. Run: ralph start --feature my-feature"
     echo ""
-    echo "Or use /ralph-features in Claude Code to generate features from a plan"
+    echo "Or use /ralph:plan in Claude Code to generate features from a plan"
 }
 
 # Main logic
@@ -152,7 +156,7 @@ chmod +x "$BIN_DIR/ralph"
 # ============================================================================
 # Create template files
 # ============================================================================
-echo -e "${BLUE}[3/5]${NC} Installing templates..."
+echo -e "${BLUE}[3/6]${NC} Installing templates..."
 
 # ralph.sh
 cat > "$RALPH_HOME/ralph.sh" << 'RALPH_SH'
@@ -259,11 +263,10 @@ build_features_index() {
             local story_count=$(jq '.userStories | length' "$prd_file")
             local completed_count=$(jq '[.userStories[] | select(.passes == true)] | length' "$prd_file")
             local failed_count=$(jq '[.userStories[] | select(.status == "failed")] | length' "$prd_file")
-            local dependencies=$(jq -r '.dependencies // []' "$prd_file")
             local status="pending"
             [[ "$completed_count" -eq "$story_count" ]] && status="completed"
             [[ "$completed_count" -gt 0 ]] || [[ $(jq '[.userStories[] | select(.status == "in_progress")] | length' "$prd_file") -gt 0 ]] && status="in_progress"
-            local feature_entry=$(jq -n --arg name "$name" --arg description "$description" --arg status "$status" --argjson dependencies "$dependencies" --argjson storyCount "$story_count" --argjson completedCount "$completed_count" --argjson failedCount "$failed_count" '{name:$name,description:$description,status:$status,dependencies:$dependencies,storyCount:$storyCount,completedCount:$completedCount,failedCount:$failedCount}')
+            local feature_entry=$(jq -n --arg name "$name" --arg description "$description" --arg status "$status" --argjson storyCount "$story_count" --argjson completedCount "$completed_count" --argjson failedCount "$failed_count" '{name:$name,description:$description,status:$status,storyCount:$storyCount,completedCount:$completedCount,failedCount:$failedCount}')
             features_array=$(echo "$features_array" | jq --argjson entry "$feature_entry" '. + [$entry]')
         fi
     done
@@ -275,31 +278,10 @@ auto_select_feature() {
     [[ ! -f "$FEATURES_INDEX" ]] && { log_error "Could not build features index"; exit 1; }
     local candidates=$(jq -r '.features[] | select(.status != "completed") | .name' "$FEATURES_INDEX")
     [[ -z "$candidates" ]] && { log_success "All features complete!"; exit 0; }
-    for feature in $candidates; do
-        local deps=$(jq -r --arg name "$feature" '.features[] | select(.name == $name) | .dependencies[]?' "$FEATURES_INDEX")
-        local all_deps_met=true
-        if [[ -n "$deps" ]]; then
-            for dep in $deps; do
-                local dep_status=$(jq -r --arg name "$dep" '.features[] | select(.name == $name) | .status' "$FEATURES_INDEX")
-                [[ "$dep_status" != "completed" ]] && { all_deps_met=false; break; }
-            done
-        fi
-        if [[ "$all_deps_met" == "true" ]]; then
-            local status=$(jq -r --arg name "$feature" '.features[] | select(.name == $name) | .status' "$FEATURES_INDEX")
-            [[ "$status" == "in_progress" ]] && { echo "$feature"; return; }
-        fi
-    done
-    for feature in $candidates; do
-        local deps=$(jq -r --arg name "$feature" '.features[] | select(.name == $name) | .dependencies[]?' "$FEATURES_INDEX")
-        local all_deps_met=true
-        if [[ -n "$deps" ]]; then
-            for dep in $deps; do
-                local dep_status=$(jq -r --arg name "$dep" '.features[] | select(.name == $name) | .status' "$FEATURES_INDEX")
-                [[ "$dep_status" != "completed" ]] && { all_deps_met=false; break; }
-            done
-        fi
-        [[ "$all_deps_met" == "true" ]] && { echo "$feature"; return; }
-    done
+    # First priority: any in_progress feature
+    local in_progress=$(jq -r '.features[] | select(.status == "in_progress") | .name' "$FEATURES_INDEX" | head -1)
+    [[ -n "$in_progress" ]] && { echo "$in_progress"; return; }
+    # Second priority: first pending feature
     echo "$candidates" | head -1
 }
 
@@ -676,7 +658,6 @@ cat > "$RALPH_HOME/templates/prd.template.json" << 'PRD_TEMPLATE'
   "name": "{{FEATURE_NAME}}",
   "branchName": "ralph/{{FEATURE_NAME}}",
   "description": "Feature description",
-  "dependencies": [],
   "createdAt": "{{CREATED_AT}}",
   "updatedAt": "{{CREATED_AT}}",
   "userStories": [
@@ -726,7 +707,7 @@ PROGRESS_TEMPLATE
 # ============================================================================
 # Create dashboard
 # ============================================================================
-echo -e "${BLUE}[4/5]${NC} Installing dashboard..."
+echo -e "${BLUE}[4/6]${NC} Installing dashboard..."
 
 cat > "$RALPH_HOME/dashboard/index.html" << 'DASHBOARD_HTML'
 <!DOCTYPE html>
@@ -824,53 +805,59 @@ cat > "$RALPH_HOME/dashboard/index.html" << 'DASHBOARD_HTML'
 DASHBOARD_HTML
 
 # ============================================================================
-# Create Claude skill
+# Create Claude skills
 # ============================================================================
-echo -e "${BLUE}[5/5]${NC} Installing Claude skill..."
+echo -e "${BLUE}[5/6]${NC} Installing Claude skills..."
 
-cat > "$SKILL_DIR/SKILL.md" << 'SKILL_MD'
+# /ralph:plan skill
+cat > "$SKILL_DIR_PLAN/SKILL.md" << 'SKILL_MD'
 ---
-name: ralph-features
-description: Convert Claude Code plans into Ralph features with user stories
+name: ralph:plan
+description: Convert plans into Ralph features with user stories. Usage: /ralph:plan @path/to/plan.md or /ralph:plan <inline description>
 ---
 
-# /ralph-features - Plan to Features Converter
+# /ralph:plan - Plan to Features Converter
 
 You are a skill that converts Claude Code plans into Ralph features with properly structured user stories.
 
+## Input Handling
+
+This skill accepts flexible input:
+
+1. **File reference**: `/ralph:plan @path/to/plan.md` - Parse the referenced plan file
+2. **Inline description**: `/ralph:plan Build a user authentication system` - Create features from the description
+3. **No arguments**: `/ralph:plan` - Search for plans in `~/.claude/plans/*.md` and `.claude/plans/*.md`
+
+## Step 0: Ensure Ralph is Ready
+
+Before generating features, ensure Ralph is installed and initialized:
+
+1. Check if ralph CLI is installed (`which ralph`). If not, install it:
+   `curl -fsSL https://raw.githubusercontent.com/nicmeriano/ralph/main/install.sh | bash`
+
+2. Check if `.ralph/` directory exists. If not, run `ralph init`
+
+3. Check if `.git/` exists. If not, run `git init`
+
+## Project Scaffolding (New Projects Only)
+
+When generating features for a new project (no existing features):
+
+**Always create a `project-setup` feature first** with stories for:
+- Initialize git repository and basic structure
+- Create package.json / project config with essential scripts
+- Set up verification commands (test, lint, typecheck)
+- Create initial commit
+
+This is required because Ralph needs git and verification scripts to function.
+**Do NOT ask the user** - it's a prerequisite.
+
 ## Workflow
 
-1. **Detect Plans**: Look for plan files in:
-   - `~/.claude/plans/*.md`
-   - `.claude/plans/*.md`
-   - Current conversation context
-
-2. **Parse Plan**: Extract features and stories from the plan structure:
-   - `## Phase N: Name` → Feature boundaries
-   - `### Task N.N: Title` → User stories
-   - `- [ ] Item` → Acceptance criteria
-   - User story format: "As a... I want... So that..."
-
-3. **Ask Clarifying Questions** if needed:
-   - Ambiguous scope
-   - Missing acceptance criteria
-   - Unclear dependencies
-   - Story sizing concerns
-
-4. **Generate Features**: Create the folder structure:
-   ```
-   .ralph/features/<feature-name>/
-   ├── prd.json
-   └── progress.txt
-
-   .ralph/features.json  # Feature index
-   ```
-
-5. **Story Sizing Rules**:
-   - Max 5 acceptance criteria per story
-   - Max 4 files touched per story
-   - Split pattern: model → API → UI → tests
-   - Each story should be completable in one iteration
+1. **Detect Plans**: Based on input type (file, inline, or search directories)
+2. **Parse Plan**: Extract features/stories from plan structure
+3. **Ask Clarifying Questions**: About scope, criteria, sizing
+4. **Generate Features**: Create PRDs and progress.txt files
 
 ## PRD Schema
 
@@ -879,7 +866,6 @@ You are a skill that converts Claude Code plans into Ralph features with properl
   "name": "feature-name",
   "branchName": "ralph/feature-name",
   "description": "Feature description",
-  "dependencies": [],
   "createdAt": "ISO timestamp",
   "updatedAt": "ISO timestamp",
   "userStories": [
@@ -907,50 +893,93 @@ You are a skill that converts Claude Code plans into Ralph features with properl
 }
 ```
 
+## Story Sizing Rules
+
+- Max 5 acceptance criteria per story
+- Max 4 files touched per story
+- Split pattern: model -> API -> UI -> tests
+
+## After Generating
+
+Offer to start the Ralph loop:
+- `/ralph:start` - Auto-select and run loop
+- `/ralph:start <feature>` - Start specific feature
+- Skip for now
+SKILL_MD
+
+# /ralph:start skill
+cat > "$SKILL_DIR_START/SKILL.md" << 'SKILL_MD'
+---
+name: ralph:start
+description: Start the Ralph development loop. Auto-selects a feature or specify one.
+---
+
+# /ralph:start - Start Ralph Loop
+
+Start the Ralph autonomous development loop.
+
+## Usage
+
+- `/ralph:start` - Auto-select feature based on status
+- `/ralph:start my-feature` - Start specific feature
+
 ## Execution
 
-When the user runs `/ralph-features`:
+1. **Verify Ralph is initialized**: Check `.ralph/` exists
+   - If not: "Ralph not initialized. Run `/ralph:plan` first."
 
-1. Check for existing plans in the plan directories
-2. If found, parse and present a summary
-3. Ask any clarifying questions
-4. Generate the feature folders with prd.json and progress.txt
-5. Generate/update features.json index
-6. Report what was created
+2. **Check for features**: Read `.ralph/features.json` or scan `.ralph/features/`
+   - If none: "No features found. Run `/ralph:plan` first."
 
-7. **Offer to Start Loop Immediately**:
-   ```
-   Would you like to start the Ralph loop now?
+3. **Run the loop**:
+   - With feature: `.ralph/ralph.sh start --feature <name>`
+   - Auto-select: `.ralph/ralph.sh start`
 
-   Available features:
-     1. auth-system (5 stories) - No dependencies
-     2. dashboard (3 stories) - Depends on: auth-system
+4. **Report**: Show selected feature, dashboard URL, progress
 
-   Options:
-     • ralph start              - Auto-select based on dependencies
-     • ralph start --feature auth-system  - Start specific feature
-     • Skip for now            - Just generate files
-   ```
+## Feature Selection
 
-   If the user chooses to start, execute `.ralph/ralph.sh start` directly.
-
-Example output:
-```
-Created 2 features from plan:
-
-📁 .ralph/features/auth-system/
-   - 5 user stories
-   - Categories: core, api, ui
-
-📁 .ralph/features/dashboard/
-   - 3 user stories
-   - Categories: ui, logic
-
-Next steps:
-  ralph start                        # Auto-select and run
-  ralph start --feature auth-system  # Run specific feature
-```
+1. First priority: Any `in_progress` feature (resume work)
+2. Second priority: First `pending` feature
 SKILL_MD
+
+# /ralph:start-once skill
+cat > "$SKILL_DIR_START_ONCE/SKILL.md" << 'SKILL_MD'
+---
+name: ralph:start-once
+description: Run a single Ralph iteration. Useful for debugging or manual control.
+---
+
+# /ralph:start-once - Single Ralph Iteration
+
+Run exactly one iteration of the Ralph loop.
+
+## Usage
+
+- `/ralph:start-once` - Auto-select feature, single iteration
+- `/ralph:start-once my-feature` - Single iteration on specific feature
+
+## When to Use
+
+- **Debugging**: Step through the loop one iteration at a time
+- **Manual control**: Review changes after each story
+- **Testing**: Verify Ralph works correctly before running the full loop
+
+## Execution
+
+1. **Verify Ralph is initialized**: Check `.ralph/` exists
+   - If not: "Ralph not initialized. Run `/ralph:plan` first."
+
+2. **Run single iteration**:
+   - With feature: `.ralph/ralph.sh start --feature <name> --once`
+   - Auto-select: `.ralph/ralph.sh start --once`
+
+3. **Report result**: Show story worked on, pass/fail, remaining stories
+SKILL_MD
+
+echo -e "${BLUE}[6/6]${NC} Cleaning up old skill if exists..."
+# Remove old ralph-features skill if it exists
+rm -rf "$HOME/.claude/skills/ralph-features" 2>/dev/null || true
 
 # ============================================================================
 # Done!
@@ -984,8 +1013,10 @@ echo "  ralph start                        Auto-select feature and run"
 echo "  ralph start --feature <name>       Run specific feature"
 echo "  ralph <feature> --once             Single iteration (legacy)"
 echo ""
-echo -e "${BOLD}Claude Skill:${NC}"
-echo "  Use /ralph-features in Claude Code to generate features from plans"
+echo -e "${BOLD}Claude Skills:${NC}"
+echo "  /ralph:plan                        Generate features from a plan"
+echo "  /ralph:start                       Start the development loop"
+echo "  /ralph:start-once                  Run a single iteration"
 echo ""
 echo -e "${BOLD}Optional: Browser Testing for UI Stories${NC}"
 echo "  Install dev-browser: https://github.com/SawyerHood/dev-browser"
