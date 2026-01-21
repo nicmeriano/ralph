@@ -734,21 +734,26 @@ Next steps:
 SKILL_MD
 
 # ============================================================================
-# Add to PATH if needed
-# ============================================================================
-if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-    echo ""
-    echo -e "${YELLOW}Note:${NC} Add this to your shell profile (.bashrc, .zshrc, etc.):"
-    echo ""
-    echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
-    echo ""
-fi
-
-# ============================================================================
 # Done!
 # ============================================================================
 echo ""
 echo -e "${GREEN}✅ Ralph installed successfully!${NC}"
+echo ""
+
+# Always show PATH setup instructions
+echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}⚠️  IMPORTANT: Add ralph to your PATH${NC}"
+echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "Run this command to add ralph to your PATH:"
+echo ""
+echo -e "  ${CYAN}echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && source ~/.zshrc${NC}"
+echo ""
+echo "Or for bash:"
+echo ""
+echo -e "  ${CYAN}echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc && source ~/.bashrc${NC}"
+echo ""
+echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "${BOLD}Quick Start:${NC}"
 echo "  cd your-project"
