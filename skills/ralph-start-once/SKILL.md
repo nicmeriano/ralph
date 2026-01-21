@@ -15,9 +15,9 @@ Run exactly one iteration of the Ralph loop.
 ## When to Use
 
 - **Debugging**: Step through the loop one iteration at a time
-- **Manual control**: Review changes after each story
+- **Manual control**: Review changes after each task
 - **Testing**: Verify Ralph works correctly before running the full loop
-- **Learning**: Understand how Ralph processes stories
+- **Learning**: Understand how Ralph processes tasks
 
 ## Execution
 
@@ -39,7 +39,7 @@ to initialize Ralph manually.
 
 ### 2. Check for features
 
-Read `.ralph/features.json` or scan `.ralph/features/` for feature directories.
+Read `.ralph/features.json` or scan `.ralph/features/` for `*.prd.json` files.
 
 If no features found:
 ```
@@ -70,30 +70,30 @@ After the iteration completes:
 Single iteration complete.
 
 Feature: auth-system
-Story worked on: US-002 - Login API
+Task worked on: T-002 - Create Login API
 Result: PASSED
 
-Progress: 2/5 stories complete
-Remaining: 3 stories
+Progress: 2/5 tasks complete
+Remaining: 3 tasks
 
 To continue:
   /ralph:start-once     - Run another single iteration
   /ralph:start          - Run the full loop
 ```
 
-Or if the story failed:
+Or if the task failed:
 
 ```
 Single iteration complete.
 
 Feature: auth-system
-Story worked on: US-002 - Login API
+Task worked on: T-002 - Create Login API
 Result: FAILED (attempt 1/3)
 
 Failure reason: Tests failed - missing JWT_SECRET env var
 
-Progress: 1/5 stories complete
-Failed: 1 story
+Progress: 1/5 tasks complete
+Failed: 1 task
 
 Review the failure and either:
   - Fix the issue manually
@@ -106,7 +106,8 @@ Review the failure and either:
 When auto-selecting, Ralph chooses:
 
 1. **First priority**: Any feature with `status: "in_progress"` (resume work)
-2. **Second priority**: First feature with `status: "pending"`
+2. **Check dependencies**: Skip features whose dependencies aren't completed
+3. **Second priority**: First non-blocked feature with `status: "pending"`
 
 ## Examples
 
@@ -132,7 +133,9 @@ For maximum control, combine with reviewing changes:
 
 ## Notes
 
-- Only processes one story per invocation
+- Only processes one task per invocation
 - Ideal for understanding how Ralph works
-- Changes are committed if the story passes
-- Failed stories are rolled back
+- Changes are committed if the task passes
+- Failed tasks are rolled back
+- Progress is logged to cumulative `progress.txt`
+- Features are stored as flat `*.prd.json` files

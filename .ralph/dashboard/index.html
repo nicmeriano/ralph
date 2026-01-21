@@ -110,7 +110,7 @@
             transition: width 0.5s ease;
         }
 
-        .current-story-banner {
+        .current-task-banner {
             background: linear-gradient(135deg, var(--ralph-primary), #a855f7);
             border-radius: 12px;
             padding: 1.5rem;
@@ -118,7 +118,7 @@
             color: white;
         }
 
-        .current-story-banner.empty {
+        .current-task-banner.empty {
             background: var(--card);
             border: 1px solid var(--border);
             color: var(--muted-foreground);
@@ -133,13 +133,13 @@
             50% { opacity: 0.7; }
         }
 
-        .story-list {
+        .task-list {
             display: flex;
             flex-direction: column;
             gap: 1rem;
         }
 
-        .story-card {
+        .task-card {
             background: var(--card);
             border: 1px solid var(--border);
             border-radius: 12px;
@@ -147,50 +147,50 @@
             transition: all 0.2s ease;
         }
 
-        .story-card:hover {
+        .task-card:hover {
             border-color: var(--ralph-primary);
         }
 
-        .story-card.in-progress {
+        .task-card.in_progress {
             border-color: var(--ralph-primary);
             border-width: 2px;
         }
 
-        .story-card.done {
+        .task-card.done {
             border-color: var(--ralph-success);
             opacity: 0.8;
         }
 
-        .story-card.failed {
+        .task-card.failed {
             border-color: var(--ralph-failed);
             background: rgba(220, 38, 38, 0.05);
         }
 
-        .story-header {
+        .task-header {
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
             margin-bottom: 0.75rem;
         }
 
-        .story-id {
+        .task-id {
             font-family: monospace;
             font-size: 0.75rem;
             color: var(--muted-foreground);
         }
 
-        .story-title {
+        .task-title {
             font-weight: 600;
             margin-bottom: 0.5rem;
         }
 
-        .story-description {
+        .task-description {
             font-size: 0.875rem;
             color: var(--muted-foreground);
             margin-bottom: 0.75rem;
         }
 
-        .story-badges {
+        .task-badges {
             display: flex;
             gap: 0.5rem;
             flex-wrap: wrap;
@@ -210,7 +210,7 @@
             color: var(--muted-foreground);
         }
 
-        .badge-in-progress {
+        .badge-in_progress {
             background: var(--ralph-primary);
             color: white;
         }
@@ -306,6 +306,26 @@
             cursor: pointer;
             font-size: 1rem;
         }
+
+        .dependency-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.125rem 0.5rem;
+            background: var(--muted);
+            border-radius: 4px;
+            font-size: 0.75rem;
+            color: var(--muted-foreground);
+            margin-right: 0.5rem;
+        }
+
+        .task-meta {
+            display: flex;
+            gap: 1rem;
+            margin-top: 0.5rem;
+            font-size: 0.75rem;
+            color: var(--muted-foreground);
+        }
     </style>
 </head>
 <body>
@@ -349,37 +369,60 @@
             document.documentElement.classList.toggle('dark');
         }
 
-        // Load available features
+        // Load available features from features.json index
         async function loadFeatures() {
             const select = document.getElementById('feature-select');
 
-            // Since we can't list directories from static HTML,
-            // we'll try to detect features by checking for common names
-            // or the user can provide the feature name via URL param
+            try {
+                const response = await fetch('../features.json');
+                if (response.ok) {
+                    const index = await response.json();
+                    select.innerHTML = '<option value="">Select a feature...</option>';
 
-            if (featureParam) {
+                    index.features.forEach(f => {
+                        const option = document.createElement('option');
+                        option.value = f.name;
+                        option.textContent = `${f.name} (${f.completedCount}/${f.taskCount})`;
+                        if (f.name === featureParam) {
+                            option.selected = true;
+                            currentFeature = f.name;
+                        }
+                        select.appendChild(option);
+                    });
+                }
+            } catch (e) {
+                console.log('Could not load features index, using URL param');
+            }
+
+            // Fallback to URL param if index not available
+            if (featureParam && !currentFeature) {
                 const option = document.createElement('option');
                 option.value = featureParam;
                 option.textContent = featureParam;
                 option.selected = true;
                 select.appendChild(option);
                 currentFeature = featureParam;
+            }
+
+            if (currentFeature) {
                 loadFeatureData();
             }
         }
 
-        // Load feature data
+        // Load feature data - FLAT FILE STRUCTURE
         async function loadFeatureData() {
             if (!currentFeature) return;
 
             try {
-                const prdResponse = await fetch(`../features/${currentFeature}/prd.json`);
+                // Flat file structure: features/<name>.prd.json
+                const prdResponse = await fetch(`../features/${currentFeature}.prd.json`);
                 if (!prdResponse.ok) throw new Error('PRD not found');
                 const prd = await prdResponse.json();
 
                 let progress = '';
                 try {
-                    const progressResponse = await fetch(`../features/${currentFeature}/progress.txt`);
+                    // Cumulative progress file shared across all features
+                    const progressResponse = await fetch(`../features/progress.txt`);
                     if (progressResponse.ok) {
                         progress = await progressResponse.text();
                     }
@@ -399,13 +442,13 @@
             }
         }
 
-        // Render dashboard
+        // Render dashboard - supports both 'tasks' and 'userStories' for backwards compatibility
         function renderDashboard(prd, progress) {
-            const stories = prd.userStories || [];
-            const total = stories.length;
-            const completed = stories.filter(s => s.passes).length;
-            const failed = stories.filter(s => s.status === 'failed').length;
-            const inProgress = stories.find(s => s.status === 'in_progress');
+            const tasks = prd.tasks || prd.userStories || [];
+            const total = tasks.length;
+            const completed = tasks.filter(t => t.passes).length;
+            const failed = tasks.filter(t => t.status === 'failed').length;
+            const inProgress = tasks.find(t => t.status === 'in_progress');
             const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
             const currentIter = prd.metadata?.currentIteration || 0;
             const maxIter = prd.metadata?.maxIterations || '-';
@@ -413,14 +456,22 @@
             const content = document.getElementById('content');
 
             content.innerHTML = `
+                <!-- Dependencies -->
+                ${prd.dependencies && prd.dependencies.length > 0 ? `
+                    <div style="margin-bottom: 1rem;">
+                        <span style="font-size: 0.875rem; color: var(--muted-foreground);">Dependencies:</span>
+                        ${prd.dependencies.map(d => `<span class="dependency-badge">${d}</span>`).join('')}
+                    </div>
+                ` : ''}
+
                 <!-- Stats Grid -->
                 <div class="stats-grid">
                     <div class="stat-card">
-                        <div class="stat-label">Stories Completed</div>
+                        <div class="stat-label">Tasks Completed</div>
                         <div class="stat-value" style="color: var(--ralph-success);">${completed}/${total}</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-label">Failed Stories</div>
+                        <div class="stat-label">Failed Tasks</div>
                         <div class="stat-value" style="color: ${failed > 0 ? 'var(--ralph-failed)' : 'var(--muted-foreground)'};">${failed}</div>
                     </div>
                     <div class="stat-card">
@@ -450,59 +501,59 @@
                     </div>
                 </div>
 
-                <!-- Current Story Banner -->
+                <!-- Current Task Banner -->
                 ${inProgress ? `
-                    <div class="current-story-banner pulse">
+                    <div class="current-task-banner pulse">
                         <div style="font-size: 0.75rem; opacity: 0.8; margin-bottom: 0.5rem;">Currently Working On</div>
                         <div style="font-size: 1.25rem; font-weight: 600;">${inProgress.id}: ${inProgress.title}</div>
                         <div style="font-size: 0.875rem; opacity: 0.9; margin-top: 0.5rem;">${inProgress.description || ''}</div>
+                        ${inProgress.category ? `<span class="badge badge-category" style="margin-top: 0.5rem;">${inProgress.category}</span>` : ''}
                     </div>
                 ` : `
-                    <div class="current-story-banner empty">
-                        <div style="font-size: 0.875rem;">No story currently in progress</div>
+                    <div class="current-task-banner empty">
+                        <div style="font-size: 0.875rem;">No task currently in progress</div>
                     </div>
                 `}
 
-                <!-- Story List -->
-                <div class="section-title" style="margin-top: 2rem;">User Stories</div>
-                <div class="story-list">
-                    ${stories.map(story => `
-                        <div class="story-card ${story.status === 'in_progress' ? 'in-progress' : ''} ${story.status === 'done' ? 'done' : ''}">
-                            <div class="story-header">
+                <!-- Task List -->
+                <div class="section-title" style="margin-top: 2rem;">Tasks</div>
+                <div class="task-list">
+                    ${tasks.map(task => `
+                        <div class="task-card ${task.status}">
+                            <div class="task-header">
                                 <div>
-                                    <span class="story-id">${story.id}</span>
-                                    <div class="story-title">${story.title}</div>
+                                    <span class="task-id">${task.id}</span>
+                                    <div class="task-title">${task.title}</div>
                                 </div>
-                                <div class="story-badges">
-                                    <span class="badge badge-${story.status}">${formatStatus(story.status)}</span>
-                                    ${story.category ? `<span class="badge badge-category">${story.category}</span>` : ''}
-                                    ${story.passes ? '<span class="badge badge-done">✓ Passes</span>' : ''}
+                                <div class="task-badges">
+                                    <span class="badge badge-${task.status}">${formatStatus(task.status)}</span>
+                                    ${task.category ? `<span class="badge badge-category">${task.category}</span>` : ''}
+                                    ${task.passes ? '<span class="badge badge-done">✓ Passes</span>' : ''}
                                 </div>
                             </div>
-                            ${story.description ? `<div class="story-description">${story.description}</div>` : ''}
-                            ${story.acceptanceCriteria && story.acceptanceCriteria.length > 0 ? `
+                            ${task.description ? `<div class="task-description">${task.description}</div>` : ''}
+                            ${task.acceptanceCriteria && task.acceptanceCriteria.length > 0 ? `
                                 <details>
                                     <summary style="cursor: pointer; font-size: 0.875rem; color: var(--muted-foreground);">
-                                        Acceptance Criteria (${story.acceptanceCriteria.length})
+                                        Acceptance Criteria (${task.acceptanceCriteria.length})
                                     </summary>
                                     <ul class="criteria-list">
-                                        ${story.acceptanceCriteria.map(c => `<li>${c}</li>`).join('')}
+                                        ${task.acceptanceCriteria.map(c => `<li>${c}</li>`).join('')}
                                     </ul>
                                 </details>
                             ` : ''}
-                            ${story.notes ? `
+                            <div class="task-meta">
+                                ${task.estimatedFiles ? `<span>Est. files: ${task.estimatedFiles}</span>` : ''}
+                                ${task.completedAt ? `<span>Completed: ${new Date(task.completedAt).toLocaleString()}</span>` : ''}
+                            </div>
+                            ${task.notes ? `
                                 <div style="margin-top: 0.75rem; padding: 0.75rem; background: var(--muted); border-radius: 8px; font-size: 0.875rem;">
-                                    <strong>Notes:</strong> ${story.notes}
+                                    <strong>Notes:</strong> ${task.notes}
                                 </div>
                             ` : ''}
-                            ${story.status === 'failed' && story.lastFailureReason ? `
+                            ${task.status === 'failed' && task.lastFailureReason ? `
                                 <div style="margin-top: 0.75rem; padding: 0.75rem; background: rgba(220, 38, 38, 0.1); border: 1px solid var(--ralph-failed); border-radius: 8px; font-size: 0.875rem;">
-                                    <strong style="color: var(--ralph-failed);">❌ Last Failure (attempt ${story.failureCount || 1}):</strong> ${story.lastFailureReason}
-                                </div>
-                            ` : ''}
-                            ${story.completedAt ? `
-                                <div style="margin-top: 0.5rem; font-size: 0.75rem; color: var(--muted-foreground);">
-                                    Completed: ${new Date(story.completedAt).toLocaleString()}
+                                    <strong style="color: var(--ralph-failed);">❌ Last Failure (attempt ${task.failureCount || 1}):</strong> ${task.lastFailureReason}
                                 </div>
                             ` : ''}
                         </div>
@@ -512,7 +563,7 @@
                 <!-- Activity Log -->
                 <div class="activity-section">
                     <div class="section-title">Recent Activity</div>
-                    <div class="activity-log">${escapeHtml(getRecentActivity(progress))}</div>
+                    <div class="activity-log">${escapeHtml(getRecentActivity(progress, currentFeature))}</div>
                 </div>
             `;
         }
@@ -533,10 +584,23 @@
             return div.innerHTML;
         }
 
-        function getRecentActivity(progress) {
+        function getRecentActivity(progress, featureName) {
             if (!progress) return 'No activity logged yet.';
 
-            // Get last 50 lines or so
+            // Try to extract activity for current feature from cumulative progress
+            const featureHeader = `## Feature: ${featureName}`;
+            const featureIndex = progress.indexOf(featureHeader);
+
+            if (featureIndex !== -1) {
+                // Find next feature section or end of file
+                const nextFeatureIndex = progress.indexOf('\n## Feature:', featureIndex + 1);
+                const featureSection = nextFeatureIndex !== -1
+                    ? progress.substring(featureIndex, nextFeatureIndex)
+                    : progress.substring(featureIndex);
+                return featureSection || 'No activity logged yet.';
+            }
+
+            // If no specific feature section, show last 50 lines
             const lines = progress.split('\n');
             const recentLines = lines.slice(-50);
             return recentLines.join('\n') || 'No activity logged yet.';

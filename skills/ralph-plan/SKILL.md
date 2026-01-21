@@ -5,7 +5,7 @@ description: Convert plans into Ralph features with user stories. Usage: /ralph:
 
 # /ralph:plan - Plan to Features Converter
 
-You are a skill that converts Claude Code plans into Ralph features with properly structured user stories.
+You are a skill that converts Claude Code plans into Ralph features with properly structured tasks.
 
 ## Input Handling
 
@@ -53,87 +53,116 @@ If not:
 
 When generating features for a **new project** (no existing `.ralph/features/` or empty features directory):
 
-**Always create a `project-setup` feature first** with these stories:
+**Always create a `project-setup` feature first** with these tasks:
 
 ```json
 {
   "name": "project-setup",
   "branchName": "ralph/project-setup",
   "description": "Initialize project structure and essential tooling for Ralph development",
+  "dependencies": [],
   "createdAt": "...",
   "updatedAt": "...",
-  "userStories": [
+  "tasks": [
     {
-      "id": "US-001",
+      "id": "T-001",
       "title": "Initialize git repository and basic structure",
-      "description": "As a developer, I want the project to have a proper git repository so that Ralph can create branches and commits",
+      "description": "Set up proper git repository so that Ralph can create branches and commits",
       "category": "config",
       "acceptanceCriteria": [
         "Git repository is initialized (.git/ exists)",
         "Basic project structure exists (src/ or appropriate directory)",
         ".gitignore file exists with appropriate ignores"
       ],
+      "estimatedFiles": 2,
       "passes": false,
       "status": "pending",
+      "notes": "",
       "failureCount": 0,
       "lastFailureReason": "",
       "completedAt": null
     },
     {
-      "id": "US-002",
+      "id": "T-002",
       "title": "Create project configuration with essential scripts",
-      "description": "As a developer, I want package.json or equivalent config so that verification commands can run",
+      "description": "Set up package.json or equivalent config so verification commands can run",
       "category": "config",
       "acceptanceCriteria": [
         "package.json (or equivalent) exists with project name and version",
         "Scripts section includes: test, lint, typecheck (or equivalents)",
         "Dependencies are installed"
       ],
+      "estimatedFiles": 1,
       "passes": false,
       "status": "pending",
+      "notes": "",
       "failureCount": 0,
       "lastFailureReason": "",
       "completedAt": null
     },
     {
-      "id": "US-003",
+      "id": "T-003",
       "title": "Set up verification commands",
-      "description": "As Ralph, I need verification scripts to validate changes before committing",
+      "description": "Configure verification scripts to validate changes before committing",
       "category": "config",
       "acceptanceCriteria": [
         "Test command runs without error (even if no tests yet)",
         "Lint command runs without error",
         "Typecheck command runs without error (if using typed language)"
       ],
+      "estimatedFiles": 2,
       "passes": false,
       "status": "pending",
+      "notes": "",
       "failureCount": 0,
       "lastFailureReason": "",
       "completedAt": null
     },
     {
-      "id": "US-004",
+      "id": "T-004",
+      "title": "Set up git pre-commit hooks for verification",
+      "description": "Install git hooks to automatically run tests, lint, and typecheck on commit",
+      "category": "config",
+      "acceptanceCriteria": [
+        "Pre-commit hook is installed and executable",
+        "Hook runs lint on staged files",
+        "Hook runs typecheck before commit",
+        "Hook runs tests before commit",
+        "Commit is blocked if any verification fails"
+      ],
+      "estimatedFiles": 2,
+      "passes": false,
+      "status": "pending",
+      "notes": "Can use husky, simple-git-hooks, or plain .git/hooks/pre-commit script",
+      "failureCount": 0,
+      "lastFailureReason": "",
+      "completedAt": null
+    },
+    {
+      "id": "T-005",
       "title": "Create initial commit",
-      "description": "As a developer, I want an initial commit so that Ralph has a clean starting point",
+      "description": "Commit all setup files so Ralph has a clean starting point",
       "category": "config",
       "acceptanceCriteria": [
         "All setup files are committed",
         "Commit message follows conventional format",
         "Working tree is clean after commit"
       ],
+      "estimatedFiles": 0,
       "passes": false,
       "status": "pending",
+      "notes": "",
       "failureCount": 0,
       "lastFailureReason": "",
       "completedAt": null
     }
   ],
   "metadata": {
-    "totalStories": 4,
-    "completedStories": 0,
-    "failedStories": 0,
+    "totalTasks": 5,
+    "completedTasks": 0,
+    "failedTasks": 0,
     "currentIteration": 0,
-    "maxIterations": 6
+    "maxIterations": 8
   }
 }
 ```
@@ -141,6 +170,7 @@ When generating features for a **new project** (no existing `.ralph/features/` o
 **This feature is required because Ralph needs:**
 - A git repository to create branches and commits
 - Verification scripts to validate changes
+- Git hooks to enforce quality on every commit
 - The ability to commit code
 
 **Do NOT ask the user if they want to include this** - it's a prerequisite for Ralph to function.
@@ -160,39 +190,70 @@ Based on input:
 
 ### 2. Parse Plan Structure
 
-Extract features and stories from the plan using these patterns:
+Extract features and tasks from the plan using these patterns:
 
 | Pattern | Becomes |
 |---------|---------|
 | `## Phase N: Name` | Feature boundary |
-| `### Task N.N: Title` | User story |
+| `### Task N.N: Title` | Task |
 | `- [ ] Item` | Acceptance criterion |
-| `As a... I want... So that...` | User story description |
 
 ### 3. Ask Clarifying Questions
 
 Before generating, ask about:
 - **Ambiguous scope**: "Should X be part of feature A or B?"
-- **Missing criteria**: "What defines 'done' for this story?"
-- **Story sizing**: "This seems large - should we split it?"
+- **Missing criteria**: "What defines 'done' for this task?"
+- **Task sizing**: "This seems large - should we split it?"
 
-### 4. Story Sizing Rules
+### 4. Task Sizing Rules (CRITICAL)
 
-Each story should be completable in one iteration:
-- **Max 5 acceptance criteria** per story
-- **Max 4 files touched** per story
-- **Split pattern**: model -> API -> UI -> tests
-- If a task touches more than 4 files, split it
+**Per-Feature Limits:**
+- **4-12 tasks per feature** (not fewer, not more)
+- If a feature has fewer than 4 tasks, consider combining with another feature
+- If a feature has more than 12 tasks, split into multiple features
+
+**Per-Task Limits:**
+- **Max 4 acceptance criteria** per task
+- **Max 4 files touched** per task (use `estimatedFiles` field)
+- If a task exceeds these, split it
+
+**Split Pattern:**
+When splitting large tasks, follow this layer order:
+1. model/schema →
+2. API/backend →
+3. UI/frontend →
+4. tests
+
+**Examples of splitting:**
+- "Build user authentication" → Split into: "Create User model", "Create login API", "Create login UI", "Add auth tests"
+- "Add dashboard" → Split into: "Create dashboard layout", "Add dashboard widgets", "Connect dashboard to API"
 
 ### 5. Category Assignment
 
 Assign categories based on the work type:
-- `core` - Core business logic, models
+- `core` - Core business logic, models, schemas
 - `api` - API endpoints, routes, handlers
 - `ui` - User interface components
-- `logic` - Algorithms, utilities
+- `logic` - Algorithms, utilities, helpers
 - `testing` - Test files, test utilities
-- `config` - Configuration, setup
+- `config` - Configuration, setup, infrastructure
+
+### 6. Dependency Management
+
+Set the `dependencies` array to list features that must be completed first:
+
+```json
+{
+  "name": "user-dashboard",
+  "dependencies": ["project-setup", "user-authentication"],
+  ...
+}
+```
+
+**Rules:**
+- `project-setup` should have `dependencies: []` (no dependencies)
+- Most features should depend on `project-setup`
+- Order features logically: setup → core → api → ui
 
 ## PRD Schema
 
@@ -203,18 +264,20 @@ Generate PRDs using this exact schema:
   "name": "feature-name",
   "branchName": "ralph/feature-name",
   "description": "High-level feature description",
-  "createdAt": "2026-01-20T10:00:00Z",
-  "updatedAt": "2026-01-20T10:00:00Z",
-  "userStories": [
+  "dependencies": ["other-feature-name"],
+  "createdAt": "2026-01-21T10:00:00Z",
+  "updatedAt": "2026-01-21T10:00:00Z",
+  "tasks": [
     {
-      "id": "US-001",
+      "id": "T-001",
       "title": "Short descriptive title",
-      "description": "As a [user type], I want [goal] so that [benefit]",
+      "description": "What this task accomplishes",
       "category": "core|api|ui|logic|testing|config",
       "acceptanceCriteria": [
         "Specific, testable criterion 1",
         "Specific, testable criterion 2"
       ],
+      "estimatedFiles": 2,
       "passes": false,
       "status": "pending",
       "notes": "",
@@ -224,9 +287,9 @@ Generate PRDs using this exact schema:
     }
   ],
   "metadata": {
-    "totalStories": 5,
-    "completedStories": 0,
-    "failedStories": 0,
+    "totalTasks": 5,
+    "completedTasks": 0,
+    "failedTasks": 0,
     "currentIteration": 0,
     "maxIterations": 8
   }
@@ -244,9 +307,10 @@ Also generate/update `.ralph/features.json`:
       "name": "feature-name",
       "description": "Feature description",
       "status": "pending|in_progress|completed",
-      "storyCount": 5,
+      "taskCount": 5,
       "completedCount": 0,
-      "failedCount": 0
+      "failedCount": 0,
+      "dependencies": ["other-feature"]
     }
   ]
 }
@@ -254,7 +318,7 @@ Also generate/update `.ralph/features.json`:
 
 ## ID Generation
 
-- Stories: `US-001`, `US-002`, etc.
+- Tasks: `T-001`, `T-002`, etc.
 - Keep IDs sequential within each feature
 - Start from 001 for each new feature
 
@@ -271,31 +335,34 @@ When `/ralph:plan` is invoked:
 
 3. **Check for New Project**: If `.ralph/features/` is empty or doesn't exist, prepare to include `project-setup` feature first
 
-4. **Present Summary**: Show detected features and story count
+4. **Present Summary**: Show detected features and task count
 
 5. **Ask Questions**: Clarify any ambiguities
 
-6. **Generate Files**:
+6. **Generate Files** (FLAT STRUCTURE):
    ```
-   .ralph/features/<feature-name>/
-   ├── prd.json        # Generated PRD
-   └── progress.txt    # Empty progress log
+   .ralph/features/
+   ├── project-setup.prd.json      # Flat PRD file
+   ├── auth-system.prd.json        # Flat PRD file
+   └── progress.txt                # Cumulative progress log
 
-   .ralph/features.json  # Updated feature index
+   .ralph/features.json            # Updated feature index
    ```
 
 7. **Report Results**:
    ```
    Created 2 features from plan:
 
-   📁 .ralph/features/project-setup/
-      - 4 user stories (required for new projects)
+   📄 .ralph/features/project-setup.prd.json
+      - 5 tasks (required for new projects)
+      - Dependencies: none
       - Categories: config
 
-   📁 .ralph/features/auth-system/
-      - 5 user stories
+   📄 .ralph/features/auth-system.prd.json
+      - 6 tasks
+      - Dependencies: project-setup
       - Categories: core, api, ui
-      - Estimated iterations: 8
+      - Estimated iterations: 9
    ```
 
 8. **Offer to Start Loop**:
@@ -306,9 +373,8 @@ When `/ralph:plan` is invoked:
    Would you like to start the Ralph loop now?
 
    Available features:
-     1. project-setup (4 stories) - Required first
-     2. auth-system (5 stories)
-     3. dashboard (3 stories)
+     1. project-setup (5 tasks) - Required first
+     2. auth-system (6 tasks) - Depends on: project-setup
 
    Options:
      • /ralph:start              - Auto-select and run loop
@@ -340,61 +406,78 @@ Implement login endpoint.
 - [ ] Error handling
 ```
 
-**Output PRD:**
+**Output PRD** (saved to `.ralph/features/authentication.prd.json`):
 ```json
 {
   "name": "authentication",
   "branchName": "ralph/authentication",
   "description": "User authentication system with login functionality",
-  "userStories": [
+  "dependencies": ["project-setup"],
+  "createdAt": "2026-01-21T10:00:00Z",
+  "updatedAt": "2026-01-21T10:00:00Z",
+  "tasks": [
     {
-      "id": "US-001",
-      "title": "User Model",
-      "description": "As a developer, I want a User model so that I can store user credentials",
+      "id": "T-001",
+      "title": "Create User model",
+      "description": "Create User schema with email and password fields, including hashing and validation",
       "category": "core",
       "acceptanceCriteria": [
         "User schema exists with email and password fields",
         "Passwords are hashed before storage",
         "Email validation is enforced"
       ],
+      "estimatedFiles": 2,
       "passes": false,
       "status": "pending",
+      "notes": "",
       "failureCount": 0,
-      "lastFailureReason": ""
+      "lastFailureReason": "",
+      "completedAt": null
     },
     {
-      "id": "US-002",
-      "title": "Login API",
-      "description": "As a user, I want to login so that I can access protected resources",
+      "id": "T-002",
+      "title": "Create Login API",
+      "description": "Implement login endpoint with JWT token generation",
       "category": "api",
       "acceptanceCriteria": [
         "POST /api/login endpoint exists",
         "Valid credentials return JWT token",
         "Invalid credentials return 401 error"
       ],
+      "estimatedFiles": 2,
       "passes": false,
       "status": "pending",
+      "notes": "",
       "failureCount": 0,
-      "lastFailureReason": ""
+      "lastFailureReason": "",
+      "completedAt": null
     }
-  ]
+  ],
+  "metadata": {
+    "totalTasks": 2,
+    "completedTasks": 0,
+    "failedTasks": 0,
+    "currentIteration": 0,
+    "maxIterations": 3
+  }
 }
 ```
 
 ## Notes
 
-- **Story order is NOT execution order** - Ralph autonomously decides priority
-- Generate `progress.txt` from template with feature name
-- Calculate `maxIterations` as `totalStories * 1.5`
-- Timestamp format: ISO 8601 (e.g., `2026-01-20T10:00:00Z`)
+- **Task order is NOT execution order** - Ralph autonomously decides priority
+- **Flat file structure** - PRDs are saved as `<feature-name>.prd.json` directly in features/
+- **Cumulative progress** - Single `progress.txt` file shared across all features
+- Calculate `maxIterations` as `totalTasks * 1.5`
+- Timestamp format: ISO 8601 (e.g., `2026-01-21T10:00:00Z`)
 - **Always offer to start the loop** after generating - this is the smoother workflow
 
 ## Browser Testing Note
 
-If any stories have `category: "ui"`, mention that browser testing is available:
+If any tasks have `category: "ui"`, mention that browser testing is available:
 
 ```
-Note: UI stories detected. To enable browser testing:
+Note: UI tasks detected. To enable browser testing:
 1. Install dev-browser: https://github.com/SawyerHood/dev-browser
 2. Set browserTesting.enabled = true in .ralph/config.json
 3. Configure devServerCommand and devServerPort

@@ -9,6 +9,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="$SCRIPT_DIR/config.json"
 PROMPT_TEMPLATE="$SCRIPT_DIR/prompt.md"
 FEATURES_INDEX="$SCRIPT_DIR/features.json"
+PROGRESS_FILE="$SCRIPT_DIR/features/progress.txt"
 
 # Colors
 RED='\033[0;31m'
@@ -134,12 +135,12 @@ ${BOLD}Usage:${NC}
     ralph <feature-name> [options]      Run loop for feature (legacy)
 
 ${BOLD}Commands:${NC}
-    start           Auto-select a feature based on status and run
+    start           Auto-select a feature based on dependencies and run
 
 ${BOLD}Options:${NC}
     --feature <name>        Lock to specific feature (with start command)
     --once                  Run single iteration only
-    --max-iterations N      Set maximum iterations (default: stories * 1.5)
+    --max-iterations N      Set maximum iterations (default: tasks * 1.5)
     --port N                Dashboard port (default: 3456)
     --sandbox true|false    Enable/disable Docker sandbox (default: true)
     --no-dashboard          Don't auto-start the dashboard
@@ -158,7 +159,7 @@ ${BOLD}Configuration:${NC}
 EOF
 }
 
-# Build or update features.json index
+# Build or update features.json index from flat *.prd.json files
 build_features_index() {
     local features_dir="$SCRIPT_DIR/features"
     local index_file="$FEATURES_INDEX"
@@ -172,26 +173,30 @@ build_features_index() {
 
     # Use nullglob to handle empty directories gracefully
     shopt -s nullglob
-    for dir in "$features_dir"/*/; do
-        if [[ -d "$dir" ]] && [[ -f "$dir/prd.json" ]]; then
-            local name=$(basename "$dir")
-            # Skip if name is empty or just whitespace
-            if [[ -z "$name" ]] || [[ "$name" == "*" ]]; then
+    for prd_file in "$features_dir"/*.prd.json; do
+        if [[ -f "$prd_file" ]]; then
+            local filename=$(basename "$prd_file")
+            local name="${filename%.prd.json}"
+
+            # Skip if name is empty
+            if [[ -z "$name" ]]; then
                 continue
             fi
-            local prd_file="$dir/prd.json"
 
             # Read feature info from prd.json
             local description=$(jq -r '.description // ""' "$prd_file")
-            local story_count=$(jq '.userStories | length' "$prd_file")
-            local completed_count=$(jq '[.userStories[] | select(.passes == true)] | length' "$prd_file")
-            local failed_count=$(jq '[.userStories[] | select(.status == "failed")] | length' "$prd_file")
+            local dependencies=$(jq -c '.dependencies // []' "$prd_file")
+
+            # Support both 'tasks' and 'userStories' for backwards compatibility
+            local task_count=$(jq '(.tasks // .userStories // []) | length' "$prd_file")
+            local completed_count=$(jq '[(.tasks // .userStories // [])[] | select(.passes == true)] | length' "$prd_file")
+            local failed_count=$(jq '[(.tasks // .userStories // [])[] | select(.status == "failed")] | length' "$prd_file")
 
             # Determine status
             local status="pending"
-            if [[ "$completed_count" -eq "$story_count" ]]; then
+            if [[ "$completed_count" -eq "$task_count" ]] && [[ "$task_count" -gt 0 ]]; then
                 status="completed"
-            elif [[ "$completed_count" -gt 0 ]] || [[ $(jq '[.userStories[] | select(.status == "in_progress")] | length' "$prd_file") -gt 0 ]]; then
+            elif [[ "$completed_count" -gt 0 ]] || [[ $(jq '[(.tasks // .userStories // [])[] | select(.status == "in_progress")] | length' "$prd_file") -gt 0 ]]; then
                 status="in_progress"
             fi
 
@@ -200,16 +205,18 @@ build_features_index() {
                 --arg name "$name" \
                 --arg description "$description" \
                 --arg status "$status" \
-                --argjson storyCount "$story_count" \
+                --argjson taskCount "$task_count" \
                 --argjson completedCount "$completed_count" \
                 --argjson failedCount "$failed_count" \
+                --argjson dependencies "$dependencies" \
                 '{
                     name: $name,
                     description: $description,
                     status: $status,
-                    storyCount: $storyCount,
+                    taskCount: $taskCount,
                     completedCount: $completedCount,
-                    failedCount: $failedCount
+                    failedCount: $failedCount,
+                    dependencies: $dependencies
                 }')
 
             features_array=$(echo "$features_array" | jq --argjson entry "$feature_entry" '. + [$entry]')
@@ -258,8 +265,8 @@ claude_select_feature() {
         exit 1
     fi
 
-    # Validate feature exists
-    if [[ ! -d "$SCRIPT_DIR/features/$selected" ]]; then
+    # Validate feature exists (flat file structure)
+    if [[ ! -f "$SCRIPT_DIR/features/$selected.prd.json" ]]; then
         log_error "Selected feature '$selected' does not exist"
         exit 1
     fi
@@ -267,10 +274,10 @@ claude_select_feature() {
     echo "$selected"
 }
 
-# Validate feature exists
+# Validate feature exists (flat file structure)
 validate_feature() {
     local feature="$1"
-    local prd_file="$SCRIPT_DIR/features/$feature/prd.json"
+    local prd_file="$SCRIPT_DIR/features/$feature.prd.json"
 
     if [[ ! -f "$prd_file" ]]; then
         log_error "Feature '$feature' not found"
@@ -278,11 +285,12 @@ validate_feature() {
         echo ""
         log_info "Available features:"
         if [[ -d "$SCRIPT_DIR/features" ]]; then
-            for dir in "$SCRIPT_DIR/features"/*; do
-                if [[ -d "$dir" ]] && [[ -f "$dir/prd.json" ]]; then
-                    echo "  - $(basename "$dir")"
-                fi
+            shopt -s nullglob
+            for f in "$SCRIPT_DIR/features"/*.prd.json; do
+                local name=$(basename "$f" .prd.json)
+                echo "  - $name"
             done
+            shopt -u nullglob
         else
             echo "  (none)"
         fi
@@ -290,40 +298,40 @@ validate_feature() {
     fi
 }
 
-# Get story count from PRD
-get_story_count() {
+# Get task count from PRD (supports both tasks and userStories)
+get_task_count() {
     local prd_file="$1"
-    jq '.userStories | length' "$prd_file"
+    jq '(.tasks // .userStories // []) | length' "$prd_file"
 }
 
-# Get completed story count
+# Get completed task count
 get_completed_count() {
     local prd_file="$1"
-    jq '[.userStories[] | select(.passes == true)] | length' "$prd_file"
+    jq '[(.tasks // .userStories // [])[] | select(.passes == true)] | length' "$prd_file"
 }
 
-# Get failed story count
+# Get failed task count
 get_failed_count() {
     local prd_file="$1"
-    jq '[.userStories[] | select(.status == "failed")] | length' "$prd_file"
+    jq '[(.tasks // .userStories // [])[] | select(.status == "failed")] | length' "$prd_file"
 }
 
 # Calculate max iterations
 calculate_max_iterations() {
     local prd_file="$1"
-    local story_count=$(get_story_count "$prd_file")
+    local task_count=$(get_task_count "$prd_file")
 
     if [[ -n "$MAX_ITERATIONS" ]]; then
         echo "$MAX_ITERATIONS"
     else
-        echo "scale=0; ($story_count * $MAX_ITERATIONS_MULTIPLIER) / 1" | bc
+        echo "scale=0; ($task_count * $MAX_ITERATIONS_MULTIPLIER) / 1" | bc
     fi
 }
 
-# Check if all stories are complete
+# Check if all tasks are complete
 all_complete() {
     local prd_file="$1"
-    local total=$(get_story_count "$prd_file")
+    local total=$(get_task_count "$prd_file")
     local completed=$(get_completed_count "$prd_file")
 
     [[ "$completed" -eq "$total" ]]
@@ -335,7 +343,7 @@ show_progress() {
     local iteration="$2"
     local max_iter="$3"
 
-    local total=$(get_story_count "$prd_file")
+    local total=$(get_task_count "$prd_file")
     local completed=$(get_completed_count "$prd_file")
     local failed=$(get_failed_count "$prd_file")
     local percent=0
@@ -352,21 +360,21 @@ show_progress() {
     for ((i=0; i<filled; i++)); do bar+="█"; done
     for ((i=0; i<empty; i++)); do bar+="░"; done
 
-    # Get current story info
-    local current_story=$(jq -r '.userStories[] | select(.status == "in_progress") | .id + ": " + .title' "$prd_file" 2>/dev/null || echo "")
+    # Get current task info (supports both tasks and userStories)
+    local current_task=$(jq -r '(.tasks // .userStories // [])[] | select(.status == "in_progress") | .id + ": " + .title' "$prd_file" 2>/dev/null || echo "")
 
     echo ""
     echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${CYAN}  Ralph Loop Progress${NC}"
     echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  Stories:    ${GREEN}$completed${NC}/$total completed"
+    echo -e "  Tasks:      ${GREEN}$completed${NC}/$total completed"
     if [[ "$failed" -gt 0 ]]; then
-        echo -e "  Failed:     ${RED}$failed${NC} stories"
+        echo -e "  Failed:     ${RED}$failed${NC} tasks"
     fi
     echo -e "  Iteration:  $iteration/$max_iter"
     echo -e "  Progress:   [${GREEN}$bar${NC}] $percent%"
-    if [[ -n "$current_story" ]]; then
-        echo -e "  Current:    ${YELLOW}$current_story${NC}"
+    if [[ -n "$current_task" ]]; then
+        echo -e "  Current:    ${YELLOW}$current_task${NC}"
     fi
     echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
@@ -415,7 +423,7 @@ stop_dashboard() {
     fi
 }
 
-# Generate prompt from template
+# Generate prompt from template (flat file structure)
 generate_prompt() {
     local feature="$1"
 
@@ -425,7 +433,7 @@ generate_prompt() {
         exit 1
     fi
 
-    local prd_file="$SCRIPT_DIR/features/$feature/prd.json"
+    local prd_file="$SCRIPT_DIR/features/$feature.prd.json"
 
     # Validate PRD file exists
     if [[ ! -f "$prd_file" ]]; then
@@ -486,7 +494,7 @@ run_iteration() {
 # Create PR on completion
 create_pr() {
     local feature="$1"
-    local prd_file="$SCRIPT_DIR/features/$feature/prd.json"
+    local prd_file="$SCRIPT_DIR/features/$feature.prd.json"
     local branch_name=$(jq -r '.branchName // "ralph/'"$feature"'"' "$prd_file")
     local description=$(jq -r '.description // ""' "$prd_file")
 
@@ -504,17 +512,17 @@ create_pr() {
     # Get default branch
     local default_branch=$(git remote show origin 2>/dev/null | grep 'HEAD branch' | awk '{print $NF}' || echo "main")
 
-    # Create PR
+    # Create PR (supports both tasks and userStories)
     gh pr create \
         --title "feat: $feature" \
         --body "## Summary
 $description
 
-## Stories Completed
-$(jq -r '.userStories[] | select(.passes == true) | "- [x] " + .id + ": " + .title' "$prd_file")
+## Tasks Completed
+$(jq -r '(.tasks // .userStories // [])[] | select(.passes == true) | "- [x] " + .id + ": " + .title' "$prd_file")
 
-## Failed Stories
-$(jq -r '.userStories[] | select(.status == "failed") | "- [ ] " + .id + ": " + .title + " (failed " + (.failureCount | tostring) + " times)"' "$prd_file")
+## Failed Tasks
+$(jq -r '(.tasks // .userStories // [])[] | select(.status == "failed") | "- [ ] " + .id + ": " + .title + " (failed " + (.failureCount | tostring) + " times)"' "$prd_file")
 
 ---
 🤖 Generated by Ralph Loop" \
@@ -570,7 +578,7 @@ main() {
     # Validate feature exists
     validate_feature "$FEATURE_NAME"
 
-    local prd_file="$SCRIPT_DIR/features/$FEATURE_NAME/prd.json"
+    local prd_file="$SCRIPT_DIR/features/$FEATURE_NAME.prd.json"
     local max_iter=$(calculate_max_iterations "$prd_file")
 
     # Update max iterations in PRD
@@ -620,7 +628,7 @@ main() {
 
             # Check if already complete
             if all_complete "$prd_file"; then
-                log_success "All stories complete!"
+                log_success "All tasks complete!"
                 create_pr "$FEATURE_NAME"
                 break
             fi
@@ -631,7 +639,7 @@ main() {
             run_iteration "$FEATURE_NAME" "$iteration" || result=$?
 
             if [[ $result -eq 0 ]]; then
-                log_success "Feature complete! All stories passing."
+                log_success "Feature complete! All tasks passing."
                 create_pr "$FEATURE_NAME"
                 break
             elif [[ $result -eq 2 ]]; then
@@ -645,9 +653,9 @@ main() {
         if [[ $iteration -gt $max_iter ]]; then
             log_warn "Max iterations ($max_iter) reached"
             local completed=$(get_completed_count "$prd_file")
-            local total=$(get_story_count "$prd_file")
+            local total=$(get_task_count "$prd_file")
             local failed=$(get_failed_count "$prd_file")
-            log_info "Progress: $completed/$total stories completed, $failed failed"
+            log_info "Progress: $completed/$total tasks completed, $failed failed"
         fi
     fi
 

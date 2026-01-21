@@ -66,7 +66,7 @@ Commands:
 Options:
     --feature <name>        Lock to specific feature (with start command)
     --once                  Run single iteration only
-    --max-iterations N      Set maximum iterations (default: stories * 1.5)
+    --max-iterations N      Set maximum iterations (default: tasks * 1.5)
     --port N                Dashboard port (default: 3456)
     --sandbox true|false    Enable/disable Docker sandbox (default: true)
     --no-dashboard          Don't auto-start the dashboard
@@ -102,9 +102,13 @@ init_ralph() {
         cp "$RALPH_HOME/ralph.sh" .ralph/
         cp "$RALPH_HOME/ralph-once.sh" .ralph/
         cp "$RALPH_HOME/prompt.md" .ralph/
+        cp "$RALPH_HOME/feature-selector-prompt.md" .ralph/
         cp "$RALPH_HOME/config.json" .ralph/
         cp "$RALPH_HOME/dashboard/index.html" .ralph/dashboard/
         cp "$RALPH_HOME/templates/"* .ralph/templates/
+
+        # Create cumulative progress file
+        cp "$RALPH_HOME/templates/progress.template.txt" .ralph/features/progress.txt
 
         chmod +x .ralph/ralph.sh
         chmod +x .ralph/ralph-once.sh
@@ -118,12 +122,10 @@ init_ralph() {
     echo "✅ Ralph initialized successfully!"
     echo ""
     echo "Next steps:"
-    echo "  1. Create a feature: mkdir .ralph/features/my-feature"
-    echo "  2. Create a PRD: cp .ralph/templates/prd.template.json .ralph/features/my-feature/prd.json"
-    echo "  3. Edit the PRD with your stories"
-    echo "  4. Run: ralph start --feature my-feature"
+    echo "  1. Use /ralph:plan in Claude Code to generate features from a plan"
+    echo "  2. Or manually create: .ralph/features/my-feature.prd.json"
+    echo "  3. Run: ralph start --feature my-feature"
     echo ""
-    echo "Or use /ralph:plan in Claude Code to generate features from a plan"
 }
 
 # Main logic
@@ -158,7 +160,7 @@ chmod +x "$BIN_DIR/ralph"
 # ============================================================================
 echo -e "${BLUE}[3/6]${NC} Installing templates..."
 
-# ralph.sh
+# ralph.sh (main loop script)
 cat > "$RALPH_HOME/ralph.sh" << 'RALPH_SH'
 #!/bin/bash
 # Ralph 2.0 - Autonomous Development Loop
@@ -171,6 +173,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="$SCRIPT_DIR/config.json"
 PROMPT_TEMPLATE="$SCRIPT_DIR/prompt.md"
 FEATURES_INDEX="$SCRIPT_DIR/features.json"
+PROGRESS_FILE="$SCRIPT_DIR/features/progress.txt"
 
 # Colors
 RED='\033[0;31m'
@@ -250,70 +253,85 @@ Options:
 EOF
 }
 
+# Build features index from flat *.prd.json files
 build_features_index() {
     local features_dir="$SCRIPT_DIR/features"
     local index_file="$FEATURES_INDEX"
     [[ ! -d "$features_dir" ]] && { log_error "No features directory"; exit 1; }
     local features_array="[]"
-    for dir in "$features_dir"/*/; do
-        if [[ -d "$dir" ]] && [[ -f "$dir/prd.json" ]]; then
-            local name=$(basename "$dir")
-            local prd_file="$dir/prd.json"
+    shopt -s nullglob
+    for prd_file in "$features_dir"/*.prd.json; do
+        if [[ -f "$prd_file" ]]; then
+            local filename=$(basename "$prd_file")
+            local name="${filename%.prd.json}"
             local description=$(jq -r '.description // ""' "$prd_file")
-            local story_count=$(jq '.userStories | length' "$prd_file")
-            local completed_count=$(jq '[.userStories[] | select(.passes == true)] | length' "$prd_file")
-            local failed_count=$(jq '[.userStories[] | select(.status == "failed")] | length' "$prd_file")
+            local dependencies=$(jq -c '.dependencies // []' "$prd_file")
+            # Support both tasks and userStories for backwards compatibility
+            local task_count=$(jq '(.tasks // .userStories // []) | length' "$prd_file")
+            local completed_count=$(jq '[(.tasks // .userStories // [])[] | select(.passes == true)] | length' "$prd_file")
+            local failed_count=$(jq '[(.tasks // .userStories // [])[] | select(.status == "failed")] | length' "$prd_file")
             local status="pending"
-            [[ "$completed_count" -eq "$story_count" ]] && status="completed"
-            [[ "$completed_count" -gt 0 ]] || [[ $(jq '[.userStories[] | select(.status == "in_progress")] | length' "$prd_file") -gt 0 ]] && status="in_progress"
-            local feature_entry=$(jq -n --arg name "$name" --arg description "$description" --arg status "$status" --argjson storyCount "$story_count" --argjson completedCount "$completed_count" --argjson failedCount "$failed_count" '{name:$name,description:$description,status:$status,storyCount:$storyCount,completedCount:$completedCount,failedCount:$failedCount}')
+            [[ "$completed_count" -eq "$task_count" ]] && [[ "$task_count" -gt 0 ]] && status="completed"
+            [[ "$completed_count" -gt 0 ]] || [[ $(jq '[(.tasks // .userStories // [])[] | select(.status == "in_progress")] | length' "$prd_file") -gt 0 ]] && status="in_progress"
+            local feature_entry=$(jq -n --arg name "$name" --arg description "$description" --arg status "$status" --argjson taskCount "$task_count" --argjson completedCount "$completed_count" --argjson failedCount "$failed_count" --argjson dependencies "$dependencies" '{name:$name,description:$description,status:$status,taskCount:$taskCount,completedCount:$completedCount,failedCount:$failedCount,dependencies:$dependencies}')
             features_array=$(echo "$features_array" | jq --argjson entry "$feature_entry" '. + [$entry]')
         fi
     done
+    shopt -u nullglob
     echo "{\"features\": $features_array}" | jq '.' > "$index_file"
 }
 
-auto_select_feature() {
+claude_select_feature() {
     build_features_index
     [[ ! -f "$FEATURES_INDEX" ]] && { log_error "Could not build features index"; exit 1; }
-    local candidates=$(jq -r '.features[] | select(.status != "completed") | .name' "$FEATURES_INDEX")
-    [[ -z "$candidates" ]] && { log_success "All features complete!"; exit 0; }
-    # First priority: any in_progress feature
-    local in_progress=$(jq -r '.features[] | select(.status == "in_progress") | .name' "$FEATURES_INDEX" | head -1)
-    [[ -n "$in_progress" ]] && { echo "$in_progress"; return; }
-    # Second priority: first pending feature
-    echo "$candidates" | head -1
+    local non_completed=$(jq -r '.features[] | select(.status != "completed") | .name' "$FEATURES_INDEX")
+    [[ -z "$non_completed" ]] && { log_success "All features complete!"; exit 0; }
+    log_info "Analyzing features..."
+    local selector_prompt="$SCRIPT_DIR/feature-selector-prompt.md"
+    [[ ! -f "$selector_prompt" ]] && { log_error "Feature selector prompt not found"; exit 1; }
+    local output=$(claude --print -p "$(cat "$selector_prompt")" 2>&1) || true
+    local selected=$(echo "$output" | grep -oP '(?<=<selected>)[^<]+(?=</selected>)' | head -1)
+    [[ -z "$selected" ]] && { log_error "Claude did not select a feature"; exit 1; }
+    [[ ! -f "$SCRIPT_DIR/features/$selected.prd.json" ]] && { log_error "Selected feature '$selected' does not exist"; exit 1; }
+    echo "$selected"
 }
 
 validate_feature() {
-    local prd_file="$SCRIPT_DIR/features/$1/prd.json"
+    local prd_file="$SCRIPT_DIR/features/$1.prd.json"
     if [[ ! -f "$prd_file" ]]; then
         log_error "Feature '$1' not found at: $prd_file"
+        log_info "Available features:"
+        shopt -s nullglob
+        for f in "$SCRIPT_DIR/features"/*.prd.json; do
+            echo "  - $(basename "$f" .prd.json)"
+        done
+        shopt -u nullglob
         exit 1
     fi
 }
 
-get_story_count() { jq '.userStories | length' "$1"; }
-get_completed_count() { jq '[.userStories[] | select(.passes == true)] | length' "$1"; }
-get_failed_count() { jq '[.userStories[] | select(.status == "failed")] | length' "$1"; }
+# Support both tasks and userStories
+get_task_count() { jq '(.tasks // .userStories // []) | length' "$1"; }
+get_completed_count() { jq '[(.tasks // .userStories // [])[] | select(.passes == true)] | length' "$1"; }
+get_failed_count() { jq '[(.tasks // .userStories // [])[] | select(.status == "failed")] | length' "$1"; }
 calculate_max_iterations() {
-    local story_count=$(get_story_count "$1")
-    [[ -n "$MAX_ITERATIONS" ]] && echo "$MAX_ITERATIONS" || echo "scale=0; ($story_count * $MAX_ITERATIONS_MULTIPLIER) / 1" | bc
+    local task_count=$(get_task_count "$1")
+    [[ -n "$MAX_ITERATIONS" ]] && echo "$MAX_ITERATIONS" || echo "scale=0; ($task_count * $MAX_ITERATIONS_MULTIPLIER) / 1" | bc
 }
-all_complete() { [[ "$(get_completed_count "$1")" -eq "$(get_story_count "$1")" ]]; }
+all_complete() { [[ "$(get_completed_count "$1")" -eq "$(get_task_count "$1")" ]]; }
 
 show_progress() {
     local prd_file="$1" iteration="$2" max_iter="$3"
-    local total=$(get_story_count "$prd_file") completed=$(get_completed_count "$prd_file") failed=$(get_failed_count "$prd_file")
+    local total=$(get_task_count "$prd_file") completed=$(get_completed_count "$prd_file") failed=$(get_failed_count "$prd_file")
     local percent=0; [[ "$total" -gt 0 ]] && percent=$((completed * 100 / total))
     local bar_width=30 filled=$((percent * bar_width / 100)) empty=$((bar_width - filled))
     local bar=""; for ((i=0; i<filled; i++)); do bar+="█"; done; for ((i=0; i<empty; i++)); do bar+="░"; done
-    local current=$(jq -r '.userStories[] | select(.status == "in_progress") | .id + ": " + .title' "$prd_file" 2>/dev/null || echo "")
+    local current=$(jq -r '(.tasks // .userStories // [])[] | select(.status == "in_progress") | .id + ": " + .title' "$prd_file" 2>/dev/null || echo "")
     echo -e "\n${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${CYAN}  Ralph Loop Progress${NC}"
     echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  Stories:    ${GREEN}$completed${NC}/$total"
-    [[ "$failed" -gt 0 ]] && echo -e "  Failed:     ${RED}$failed${NC} stories"
+    echo -e "  Tasks:      ${GREEN}$completed${NC}/$total"
+    [[ "$failed" -gt 0 ]] && echo -e "  Failed:     ${RED}$failed${NC} tasks"
     echo -e "  Iteration:  $iteration/$max_iter"
     echo -e "  Progress:   [${GREEN}$bar${NC}] $percent%"
     [[ -n "$current" ]] && echo -e "  Current:    ${YELLOW}$current${NC}"
@@ -335,7 +353,7 @@ start_dashboard() {
 stop_dashboard() { [[ -n "$DASHBOARD_PID" ]] && kill "$DASHBOARD_PID" 2>/dev/null || true; }
 
 generate_prompt() {
-    local feature="$1" prd_file="$SCRIPT_DIR/features/$feature/prd.json"
+    local feature="$1" prd_file="$SCRIPT_DIR/features/$feature.prd.json"
     local branch_name=$(jq -r '.branchName // "ralph/'"$feature"'"' "$prd_file")
     local prompt=$(cat "$PROMPT_TEMPLATE")
     prompt="${prompt//\{\{FEATURE_NAME\}\}/$feature}"
@@ -358,7 +376,7 @@ run_iteration() {
 }
 
 create_pr() {
-    local feature="$1" prd_file="$SCRIPT_DIR/features/$feature/prd.json"
+    local feature="$1" prd_file="$SCRIPT_DIR/features/$feature.prd.json"
     [[ "$CREATE_PR_ON_COMPLETION" != "true" ]] && return
     command -v gh &>/dev/null || { log_warn "gh CLI not found"; return; }
     local branch_name=$(jq -r '.branchName // "ralph/'"$feature"'"' "$prd_file")
@@ -368,11 +386,11 @@ create_pr() {
     gh pr create --title "feat: $feature" --body "## Summary
 $description
 
-## Stories Completed
-$(jq -r '.userStories[] | select(.passes == true) | "- [x] " + .id + ": " + .title' "$prd_file")
+## Tasks Completed
+$(jq -r '(.tasks // .userStories // [])[] | select(.passes == true) | "- [x] " + .id + ": " + .title' "$prd_file")
 
-## Failed Stories
-$(jq -r '.userStories[] | select(.status == "failed") | "- [ ] " + .id + ": " + .title + " (failed " + (.failureCount | tostring) + " times)"' "$prd_file")
+## Failed Tasks
+$(jq -r '(.tasks // .userStories // [])[] | select(.status == "failed") | "- [ ] " + .id + ": " + .title + " (failed " + (.failureCount | tostring) + " times)"' "$prd_file")
 
 ---
 🤖 Generated by Ralph Loop" --base "$default_branch" --head "$branch_name" || log_warn "PR creation failed"
@@ -390,14 +408,14 @@ main() {
     parse_args "$@"
     if [[ "$COMMAND" == "start" ]] && [[ "$AUTO_SELECT_FEATURE" == "true" ]] && [[ -z "$FEATURE_NAME" ]]; then
         log_info "Auto-selecting feature..."
-        FEATURE_NAME=$(auto_select_feature)
+        FEATURE_NAME=$(claude_select_feature)
         [[ -z "$FEATURE_NAME" ]] && { log_error "No eligible features found"; exit 1; }
         log_success "Selected feature: $FEATURE_NAME"
     fi
     [[ -z "$FEATURE_NAME" ]] && { log_error "No feature provided"; show_help; exit 1; }
     validate_feature "$FEATURE_NAME"
 
-    local prd_file="$SCRIPT_DIR/features/$FEATURE_NAME/prd.json"
+    local prd_file="$SCRIPT_DIR/features/$FEATURE_NAME.prd.json"
     local max_iter=$(calculate_max_iterations "$prd_file")
     local tmp=$(mktemp); jq ".metadata.maxIterations = $max_iter" "$prd_file" > "$tmp"; mv "$tmp" "$prd_file"
 
@@ -422,7 +440,7 @@ main() {
         local iteration=1
         while [[ $iteration -le $max_iter ]]; do
             show_progress "$prd_file" "$iteration" "$max_iter"
-            all_complete "$prd_file" && { log_success "All stories complete!"; create_pr "$FEATURE_NAME"; break; }
+            all_complete "$prd_file" && { log_success "All tasks complete!"; create_pr "$FEATURE_NAME"; break; }
             update_iteration_count "$prd_file" "$iteration"
             local result=0
             run_iteration "$FEATURE_NAME" "$iteration" || result=$?
@@ -430,7 +448,7 @@ main() {
             [[ $result -eq 2 ]] && { log_error "Stopping due to branch error"; break; }
             ((iteration++))
         done
-        [[ $iteration -gt $max_iter ]] && { log_warn "Max iterations reached"; log_info "Progress: $(get_completed_count "$prd_file")/$(get_story_count "$prd_file") completed, $(get_failed_count "$prd_file") failed"; }
+        [[ $iteration -gt $max_iter ]] && { log_warn "Max iterations reached"; log_info "Progress: $(get_completed_count "$prd_file")/$(get_task_count "$prd_file") completed, $(get_failed_count "$prd_file") failed"; }
     fi
 
     show_progress "$prd_file" "$iteration" "$max_iter"
@@ -451,6 +469,51 @@ exec "$SCRIPT_DIR/ralph.sh" "$@" --once
 RALPH_ONCE
 
 chmod +x "$RALPH_HOME/ralph-once.sh"
+
+# feature-selector-prompt.md
+cat > "$RALPH_HOME/feature-selector-prompt.md" << 'SELECTOR_MD'
+# Feature Selection Agent
+
+Analyze available features and select the best one to work on.
+
+## Input
+
+Read `.ralph/features.json` to see all features with their status, descriptions, and dependencies.
+
+## Selection Priority (in order)
+
+### 1. Resume in-progress work
+Any feature with `status: "in_progress"` takes highest priority - always resume unfinished work.
+
+### 2. Check explicit dependencies FIRST
+For `pending` features, check the `dependencies` array.
+
+**A feature is BLOCKED if:**
+- It has dependencies listed in its `dependencies` array
+- ANY of those dependencies has `status` != `"completed"`
+
+**Skip blocked features** and move to the next candidate.
+
+### 3. Infer dependencies from names and descriptions (fallback)
+If no explicit `dependencies` array exists, analyze names and descriptions to determine logical order.
+
+**Foundation/Setup features FIRST** - look for keywords like:
+- "setup", "init", "initialize", "scaffold", "bootstrap"
+- "project", "foundation", "infrastructure", "config"
+
+### 4. Skip problematic features
+- Skip features with `status: "completed"`
+- Consider skipping features with >50% failure rate
+
+## Output
+
+Output ONLY the selected feature name wrapped in tags:
+```
+<selected>feature-name</selected>
+```
+
+No other output. Just the tag with the feature name.
+SELECTOR_MD
 
 # config.json
 cat > "$RALPH_HOME/config.json" << 'CONFIG_JSON'
@@ -486,104 +549,53 @@ You are Ralph, an autonomous development agent working on feature **{{FEATURE_NA
 
 ## Your Mission
 
-Complete one user story per iteration. You decide which story to work on based on priority, dependencies, and what makes sense given the codebase patterns.
+Complete one task per iteration. You decide which task to work on based on priority, dependencies, and what makes sense given the codebase patterns.
 
 ## Files to Read First
 
-1. `.ralph/features/{{FEATURE_NAME}}/progress.txt` - **READ THE CODEBASE PATTERNS SECTION FIRST**
-2. `.ralph/features/{{FEATURE_NAME}}/prd.json` - The PRD with all user stories
+1. `.ralph/features/progress.txt` - **READ THE CODEBASE PATTERNS SECTION FIRST**
+2. `.ralph/features/{{FEATURE_NAME}}.prd.json` - The PRD with all tasks
 
 ## Iteration Protocol
 
 ### Step 0: Verify Branch
-
-Before doing anything else, verify you are on the correct branch:
 
 ```bash
 current_branch=$(git branch --show-current)
 expected_branch="{{BRANCH_NAME}}"
 
 if [[ "$current_branch" != "$expected_branch" ]]; then
-    echo "Switching to correct branch: $expected_branch"
     git checkout "$expected_branch" || git checkout -b "$expected_branch"
 fi
 ```
 
-**If branch switch fails:**
-1. Log the error to progress.txt
-2. Output: `<promise>BRANCH_ERROR</promise>`
-3. Exit immediately - do not proceed with any code changes
+**If branch switch fails:** Output `<promise>BRANCH_ERROR</promise>` and exit.
 
 ### Step 1: Understand Context
 - Read `progress.txt` patterns section first
-- Read `prd.json` to see all stories
+- Read the PRD to see all tasks
 - Read `AGENTS.md` if it exists
 
-### Step 2: Select a Story
+### Step 2: Select a Task
 
-Pick the highest priority story where `passes: false`. Consider dependencies and logical order.
+Pick the highest priority task where `passes: false`. Consider dependencies and logical order.
 
-**Handling Failed Stories:**
-- Before retrying a story with `status: "failed"`, read its `lastFailureReason` carefully
-- If `failureCount >= 3`, **skip the story** - it needs human intervention
-- When retrying, address the specific failure reason documented
+**Handling Failed Tasks:**
+- If `failureCount >= 3`, **skip the task** - it needs human intervention
+- When retrying, address the specific `lastFailureReason`
 
-### Step 3: Mark Story In Progress
-Update `prd.json`: set `status` to `"in_progress"`
+### Step 3: Mark Task In Progress
+Update the PRD: set `status` to `"in_progress"`
 
-### Step 4: Implement the Story
+### Step 4: Implement the Task
 Follow acceptance criteria. Use discovered patterns. Keep changes minimal.
+Respect the `estimatedFiles` field.
 
 ### Step 5: Verify
 Run typecheck/tests/lint as applicable.
 
-### Step 5b: Browser Testing (UI Stories Only)
-
-**Only run this step if ALL conditions are met:**
-1. Story `category` is `"ui"`
-2. `.ralph/config.json` has `browserTesting.enabled: true`
-3. The `dev-browser` tool is available
-
-**If dev-browser is not available:**
-- Log a warning but do NOT fail the verification
-- Continue with Step 6
-
 ### Step 6: Update Documentation (MANDATORY)
-
-**You MUST evaluate learnings after EVERY iteration.** This is not optional.
-
-**Check for New Patterns:**
-- Did I discover how this codebase handles [X]?
-- Did I find an existing utility/helper I should use?
-- Did I learn about a naming convention?
-
-**Check for Gotchas:**
-- Did something not work as expected?
-- Did I have to try multiple approaches?
-- Is there a common mistake others might make?
-
-**If you have learnings, add them to `AGENTS.md` in the project root:**
-
-```markdown
-## Patterns
-
-### [Pattern Name]
-**Discovered:** [Story ID] on [YYYY-MM-DD]
-**Context:** [When this pattern applies]
-**Pattern:** [Description]
-
----
-
-## Gotchas
-
-### [Gotcha Title]
-**Discovered:** [Story ID] on [YYYY-MM-DD]
-**Problem:** [What went wrong]
-**Solution:** [How to handle it]
-**Why:** [Brief explanation]
-
----
-```
+If you have learnings, add them to `AGENTS.md` in the project root.
 
 ### Step 7: Record Outcome
 
@@ -596,35 +608,16 @@ Run typecheck/tests/lint as applicable.
 **If FAILS:**
 1. Set `status` to `"failed"`, increment `failureCount`, set `lastFailureReason`
 2. Don't commit broken code
-3. Revert uncommitted changes: `git checkout -- .`
+3. Revert: `git checkout -- .`
 
 ### Step 8: Log Learnings
-Append to `progress.txt`:
-```
----
-## [DATE] - [STORY_ID]
-- What was implemented
-- Files changed
-- **Learnings:** patterns, gotchas
-```
+Append to `.ralph/features/progress.txt`
 
 ### Step 9: Check Completion
-If ALL stories have `passes: true`, output:
+If ALL tasks have `passes: true`, output:
 ```
 <promise>COMPLETE</promise>
 ```
-
-Otherwise, exit. The loop spawns next iteration.
-
-## Rules
-1. One story per iteration
-2. Patterns first - check progress.txt before coding
-3. Verify before committing
-4. Learn from failures
-5. Skip stuck stories - if `failureCount >= 3`, skip
-6. Document learnings - ALWAYS evaluate each iteration
-7. Minimal changes only
-8. Branch awareness - verify in Step 0
 
 ## PRD Schema Reference
 
@@ -633,13 +626,15 @@ Otherwise, exit. The loop spawns next iteration.
   "name": "feature-name",
   "branchName": "ralph/feature-name",
   "description": "Feature description",
-  "userStories": [
+  "dependencies": ["other-feature"],
+  "tasks": [
     {
-      "id": "US-001",
-      "title": "Story title",
-      "description": "As a... I want... So that...",
+      "id": "T-001",
+      "title": "Task title",
+      "description": "What this task accomplishes",
       "category": "core|api|ui|logic|testing|config",
       "acceptanceCriteria": ["Criterion 1", "Criterion 2"],
+      "estimatedFiles": 2,
       "passes": false,
       "status": "pending|in_progress|done|failed",
       "notes": "",
@@ -657,16 +652,21 @@ cat > "$RALPH_HOME/templates/prd.template.json" << 'PRD_TEMPLATE'
 {
   "name": "{{FEATURE_NAME}}",
   "branchName": "ralph/{{FEATURE_NAME}}",
-  "description": "Feature description",
+  "description": "Feature description goes here",
+  "dependencies": [],
   "createdAt": "{{CREATED_AT}}",
   "updatedAt": "{{CREATED_AT}}",
-  "userStories": [
+  "tasks": [
     {
-      "id": "US-001",
-      "title": "Story title",
-      "description": "As a [user], I want [goal] so that [benefit]",
+      "id": "T-001",
+      "title": "Task title",
+      "description": "What this task accomplishes",
       "category": "core",
-      "acceptanceCriteria": ["Criterion 1", "Criterion 2"],
+      "acceptanceCriteria": [
+        "Criterion 1",
+        "Criterion 2"
+      ],
+      "estimatedFiles": 2,
       "passes": false,
       "status": "pending",
       "notes": "",
@@ -676,22 +676,22 @@ cat > "$RALPH_HOME/templates/prd.template.json" << 'PRD_TEMPLATE'
     }
   ],
   "metadata": {
-    "totalStories": 1,
-    "completedStories": 0,
-    "failedStories": 0,
+    "totalTasks": 1,
+    "completedTasks": 0,
+    "failedTasks": 0,
     "currentIteration": 0,
     "maxIterations": 2
   }
 }
 PRD_TEMPLATE
 
-# progress.template.txt
+# progress.template.txt (cumulative format)
 cat > "$RALPH_HOME/templates/progress.template.txt" << 'PROGRESS_TEMPLATE'
-# {{FEATURE_NAME}} - Progress Log
+# Ralph Progress Log
 
 ## Codebase Patterns
 <!--
-Add discovered patterns here as you work.
+Shared patterns discovered across all features.
 Future iterations should read this section FIRST.
 -->
 
@@ -699,9 +699,7 @@ Future iterations should read this section FIRST.
 
 ---
 
-## Activity Log
-
-<!-- Each iteration adds an entry below -->
+<!-- Feature sections are appended below as work progresses -->
 PROGRESS_TEMPLATE
 
 # ============================================================================
@@ -732,18 +730,18 @@ cat > "$RALPH_HOME/dashboard/index.html" << 'DASHBOARD_HTML'
         .progress-section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 2rem; }
         .progress-bar-container { background: var(--muted); border-radius: 9999px; height: 12px; overflow: hidden; margin-top: 1rem; }
         .progress-bar-fill { height: 100%; background: linear-gradient(90deg, var(--ralph-primary), #a855f7); border-radius: 9999px; transition: width 0.5s; }
-        .current-story-banner { background: linear-gradient(135deg, var(--ralph-primary), #a855f7); border-radius: 12px; padding: 1.5rem; margin-bottom: 2rem; color: white; }
-        .current-story-banner.empty { background: var(--card); border: 1px solid var(--border); color: var(--muted-foreground); }
+        .current-task-banner { background: linear-gradient(135deg, var(--ralph-primary), #a855f7); border-radius: 12px; padding: 1.5rem; margin-bottom: 2rem; color: white; }
+        .current-task-banner.empty { background: var(--card); border: 1px solid var(--border); color: var(--muted-foreground); }
         .pulse { animation: pulse 2s infinite; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
-        .story-list { display: flex; flex-direction: column; gap: 1rem; }
-        .story-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
-        .story-card.in-progress { border-color: var(--ralph-primary); border-width: 2px; }
-        .story-card.done { border-color: var(--ralph-success); opacity: 0.8; }
-        .story-card.failed { border-color: var(--ralph-failed); background: rgba(220, 38, 38, 0.05); }
-        .story-header { display: flex; justify-content: space-between; margin-bottom: 0.75rem; }
-        .story-id { font-family: monospace; font-size: 0.75rem; color: var(--muted-foreground); }
-        .story-title { font-weight: 600; margin-bottom: 0.5rem; }
+        .task-list { display: flex; flex-direction: column; gap: 1rem; }
+        .task-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
+        .task-card.in-progress { border-color: var(--ralph-primary); border-width: 2px; }
+        .task-card.done { border-color: var(--ralph-success); opacity: 0.8; }
+        .task-card.failed { border-color: var(--ralph-failed); background: rgba(220, 38, 38, 0.05); }
+        .task-header { display: flex; justify-content: space-between; margin-bottom: 0.75rem; }
+        .task-id { font-family: monospace; font-size: 0.75rem; color: var(--muted-foreground); }
+        .task-title { font-weight: 600; margin-bottom: 0.5rem; }
         .badge { display: inline-flex; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 500; }
         .badge-pending { background: var(--muted); color: var(--muted-foreground); }
         .badge-in-progress { background: var(--ralph-primary); color: white; }
@@ -773,18 +771,20 @@ cat > "$RALPH_HOME/dashboard/index.html" << 'DASHBOARD_HTML'
         if (feature) { document.getElementById('feature-select').innerHTML = `<option value="${feature}" selected>${feature}</option>`; loadData(); }
         async function loadData() {
             try {
-                const prd = await (await fetch(`../features/${feature}/prd.json`)).json();
+                // Flat file structure: features/<name>.prd.json
+                const prd = await (await fetch(`../features/${feature}.prd.json`)).json();
                 let progress = 'No activity yet.';
-                try { progress = await (await fetch(`../features/${feature}/progress.txt`)).text(); } catch(e) {}
+                try { progress = await (await fetch(`../features/progress.txt`)).text(); } catch(e) {}
                 render(prd, progress);
             } catch(e) { document.getElementById('content').innerHTML = `<div class="no-feature"><h2>Feature Not Found</h2><p>${e.message}</p></div>`; }
         }
         function render(prd, progress) {
-            const stories = prd.userStories || [], total = stories.length;
-            const completed = stories.filter(s=>s.passes).length;
-            const failed = stories.filter(s=>s.status==='failed').length;
+            // Support both tasks and userStories for backwards compatibility
+            const tasks = prd.tasks || prd.userStories || [], total = tasks.length;
+            const completed = tasks.filter(s=>s.passes).length;
+            const failed = tasks.filter(s=>s.status==='failed').length;
             const percent = total > 0 ? Math.round((completed/total)*100) : 0;
-            const inProgress = stories.find(s=>s.status==='in_progress');
+            const inProgress = tasks.find(s=>s.status==='in_progress');
             document.getElementById('content').innerHTML = `
                 <div class="stats-grid">
                     <div class="stat-card"><div class="stat-label">Completed</div><div class="stat-value" style="color:var(--ralph-success)">${completed}/${total}</div></div>
@@ -793,8 +793,8 @@ cat > "$RALPH_HOME/dashboard/index.html" << 'DASHBOARD_HTML'
                     <div class="stat-card"><div class="stat-label">Progress</div><div class="stat-value">${percent}%</div></div>
                 </div>
                 <div class="progress-section"><div style="display:flex;justify-content:space-between"><span>Progress</span><span>${percent}%</span></div><div class="progress-bar-container"><div class="progress-bar-fill" style="width:${percent}%"></div></div></div>
-                ${inProgress ? `<div class="current-story-banner pulse"><div style="font-size:0.75rem;opacity:0.8">Currently Working On</div><div style="font-size:1.25rem;font-weight:600">${inProgress.id}: ${inProgress.title}</div></div>` : '<div class="current-story-banner empty">No story in progress</div>'}
-                <div class="story-list">${stories.map(s=>`<div class="story-card ${s.status}"><div class="story-header"><div><span class="story-id">${s.id}</span><div class="story-title">${s.title}</div></div><span class="badge badge-${s.status}">${formatStatus(s.status)}</span></div>${s.status === 'failed' && s.lastFailureReason ? `<div class="failure-box"><strong style="color:var(--ralph-failed)">❌ Last Failure (attempt ${s.failureCount || 1}):</strong> ${s.lastFailureReason}</div>` : ''}</div>`).join('')}</div>`;
+                ${inProgress ? `<div class="current-task-banner pulse"><div style="font-size:0.75rem;opacity:0.8">Currently Working On</div><div style="font-size:1.25rem;font-weight:600">${inProgress.id}: ${inProgress.title}</div></div>` : '<div class="current-task-banner empty">No task in progress</div>'}
+                <div class="task-list">${tasks.map(s=>`<div class="task-card ${s.status}"><div class="task-header"><div><span class="task-id">${s.id}</span><div class="task-title">${s.title}</div></div><span class="badge badge-${s.status}">${formatStatus(s.status)}</span></div>${s.status === 'failed' && s.lastFailureReason ? `<div class="failure-box"><strong style="color:var(--ralph-failed)">❌ Last Failure (attempt ${s.failureCount || 1}):</strong> ${s.lastFailureReason}</div>` : ''}</div>`).join('')}</div>`;
         }
         function formatStatus(s) { return {pending:'⏳ Pending',in_progress:'🔄 In Progress',done:'✅ Done',failed:'❌ Failed'}[s]||s; }
         document.getElementById('feature-select').onchange = e => { if(e.target.value) window.location.search = `?feature=${e.target.value}`; };
@@ -818,46 +818,43 @@ description: Convert plans into Ralph features with user stories. Usage: /ralph:
 
 # /ralph:plan - Plan to Features Converter
 
-You are a skill that converts Claude Code plans into Ralph features with properly structured user stories.
+You are a skill that converts Claude Code plans into Ralph features with properly structured tasks.
 
 ## Input Handling
 
-This skill accepts flexible input:
-
-1. **File reference**: `/ralph:plan @path/to/plan.md` - Parse the referenced plan file
-2. **Inline description**: `/ralph:plan Build a user authentication system` - Create features from the description
-3. **No arguments**: `/ralph:plan` - Search for plans in `~/.claude/plans/*.md` and `.claude/plans/*.md`
+1. **File reference**: `/ralph:plan @path/to/plan.md`
+2. **Inline description**: `/ralph:plan Build a user authentication system`
+3. **No arguments**: `/ralph:plan` - Search for plans in plan directories
 
 ## Step 0: Ensure Ralph is Ready
 
-Before generating features, ensure Ralph is installed and initialized:
-
-1. Check if ralph CLI is installed (`which ralph`). If not, install it:
-   `curl -fsSL https://raw.githubusercontent.com/nicmeriano/ralph/main/install.sh | bash`
-
+1. Check if ralph CLI is installed (`which ralph`). If not, install it.
 2. Check if `.ralph/` directory exists. If not, run `ralph init`
-
 3. Check if `.git/` exists. If not, run `git init`
 
 ## Project Scaffolding (New Projects Only)
 
 When generating features for a new project (no existing features):
 
-**Always create a `project-setup` feature first** with stories for:
+**Always create a `project-setup` feature first** with tasks for:
 - Initialize git repository and basic structure
 - Create package.json / project config with essential scripts
 - Set up verification commands (test, lint, typecheck)
+- Set up git pre-commit hooks for verification
 - Create initial commit
 
-This is required because Ralph needs git and verification scripts to function.
-**Do NOT ask the user** - it's a prerequisite.
+This is required because Ralph needs git, verification scripts, and hooks to function.
 
-## Workflow
+## Task Sizing Rules (CRITICAL)
 
-1. **Detect Plans**: Based on input type (file, inline, or search directories)
-2. **Parse Plan**: Extract features/stories from plan structure
-3. **Ask Clarifying Questions**: About scope, criteria, sizing
-4. **Generate Features**: Create PRDs and progress.txt files
+**Per-Feature Limits:**
+- **4-12 tasks per feature** (not fewer, not more)
+
+**Per-Task Limits:**
+- **Max 4 acceptance criteria** per task
+- **Max 4 files touched** per task (use `estimatedFiles` field)
+
+**Split Pattern:** model → API → UI → tests
 
 ## PRD Schema
 
@@ -866,15 +863,17 @@ This is required because Ralph needs git and verification scripts to function.
   "name": "feature-name",
   "branchName": "ralph/feature-name",
   "description": "Feature description",
+  "dependencies": ["other-feature"],
   "createdAt": "ISO timestamp",
   "updatedAt": "ISO timestamp",
-  "userStories": [
+  "tasks": [
     {
-      "id": "US-001",
-      "title": "Story title",
-      "description": "As a... I want... So that...",
+      "id": "T-001",
+      "title": "Task title",
+      "description": "What this task accomplishes",
       "category": "core|api|ui|logic|testing|config",
       "acceptanceCriteria": ["Criterion 1", "Criterion 2"],
+      "estimatedFiles": 2,
       "passes": false,
       "status": "pending",
       "notes": "",
@@ -884,27 +883,31 @@ This is required because Ralph needs git and verification scripts to function.
     }
   ],
   "metadata": {
-    "totalStories": N,
-    "completedStories": 0,
-    "failedStories": 0,
+    "totalTasks": N,
+    "completedTasks": 0,
+    "failedTasks": 0,
     "currentIteration": 0,
     "maxIterations": N * 1.5
   }
 }
 ```
 
-## Story Sizing Rules
+## Output Files (FLAT STRUCTURE)
 
-- Max 5 acceptance criteria per story
-- Max 4 files touched per story
-- Split pattern: model -> API -> UI -> tests
+```
+.ralph/features/
+├── project-setup.prd.json      # Flat PRD file
+├── auth-system.prd.json        # Flat PRD file
+└── progress.txt                # Cumulative progress log
+
+.ralph/features.json            # Feature index
+```
 
 ## After Generating
 
 Offer to start the Ralph loop:
 - `/ralph:start` - Auto-select and run loop
 - `/ralph:start <feature>` - Start specific feature
-- Skip for now
 SKILL_MD
 
 # /ralph:start skill
@@ -916,31 +919,25 @@ description: Start the Ralph development loop. Auto-selects a feature or specify
 
 # /ralph:start - Start Ralph Loop
 
-Start the Ralph autonomous development loop.
-
 ## Usage
 
-- `/ralph:start` - Auto-select feature based on status
+- `/ralph:start` - Auto-select feature based on dependencies and status
 - `/ralph:start my-feature` - Start specific feature
 
 ## Execution
 
 1. **Verify Ralph is initialized**: Check `.ralph/` exists
-   - If not: "Ralph not initialized. Run `/ralph:plan` first."
-
-2. **Check for features**: Read `.ralph/features.json` or scan `.ralph/features/`
-   - If none: "No features found. Run `/ralph:plan` first."
-
+2. **Check for features**: Scan `.ralph/features/` for `*.prd.json` files
 3. **Run the loop**:
    - With feature: `.ralph/ralph.sh start --feature <name>`
    - Auto-select: `.ralph/ralph.sh start`
 
-4. **Report**: Show selected feature, dashboard URL, progress
-
 ## Feature Selection
 
-1. First priority: Any `in_progress` feature (resume work)
-2. Second priority: First `pending` feature
+1. Resume in-progress first
+2. Check dependencies - skip blocked features
+3. Start pending next
+4. Skip completed
 SKILL_MD
 
 # /ralph:start-once skill
@@ -952,29 +949,17 @@ description: Run a single Ralph iteration. Useful for debugging or manual contro
 
 # /ralph:start-once - Single Ralph Iteration
 
-Run exactly one iteration of the Ralph loop.
-
 ## Usage
 
 - `/ralph:start-once` - Auto-select feature, single iteration
 - `/ralph:start-once my-feature` - Single iteration on specific feature
 
-## When to Use
-
-- **Debugging**: Step through the loop one iteration at a time
-- **Manual control**: Review changes after each story
-- **Testing**: Verify Ralph works correctly before running the full loop
-
 ## Execution
 
 1. **Verify Ralph is initialized**: Check `.ralph/` exists
-   - If not: "Ralph not initialized. Run `/ralph:plan` first."
-
 2. **Run single iteration**:
    - With feature: `.ralph/ralph.sh start --feature <name> --once`
    - Auto-select: `.ralph/ralph.sh start --once`
-
-3. **Report result**: Show story worked on, pass/fail, remaining stories
 SKILL_MD
 
 echo -e "${BLUE}[6/6]${NC} Cleaning up old skill if exists..."
@@ -1018,7 +1003,7 @@ echo "  /ralph:plan                        Generate features from a plan"
 echo "  /ralph:start                       Start the development loop"
 echo "  /ralph:start-once                  Run a single iteration"
 echo ""
-echo -e "${BOLD}Optional: Browser Testing for UI Stories${NC}"
-echo "  Install dev-browser: https://github.com/SawyerHood/dev-browser"
-echo "  Set browserTesting.enabled = true in .ralph/config.json"
+echo -e "${BOLD}File Structure:${NC}"
+echo "  .ralph/features/<name>.prd.json    Flat PRD files"
+echo "  .ralph/features/progress.txt       Cumulative progress log"
 echo ""

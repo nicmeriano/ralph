@@ -9,7 +9,7 @@ Start the Ralph autonomous development loop.
 
 ## Usage
 
-- `/ralph:start` - Auto-select feature based on status
+- `/ralph:start` - Auto-select feature based on dependencies and status
 - `/ralph:start my-feature` - Start specific feature
 
 ## Execution
@@ -32,7 +32,7 @@ to initialize Ralph manually.
 
 ### 2. Check for features
 
-Read `.ralph/features.json` or scan `.ralph/features/` for feature directories.
+Read `.ralph/features.json` or scan `.ralph/features/` for `*.prd.json` files.
 
 If no features found:
 ```
@@ -56,7 +56,7 @@ Execute the ralph loop script:
 ```bash
 .ralph/ralph.sh start
 ```
-(Ralph will use Claude to analyze and select the best feature)
+(Ralph will use Claude to analyze dependencies and select the best feature)
 
 ### 4. Report
 
@@ -66,14 +66,15 @@ Starting Ralph loop...
 
 Feature: auth-system (auto-selected)
 Branch: ralph/auth-system
-Stories: 0/5 complete
+Tasks: 0/5 complete
+Dependencies: project-setup (completed)
 Mode: Loop (max 8 iterations)
 
 Dashboard: http://localhost:3456/?feature=auth-system
 
 Ralph is now working autonomously. You can:
 - Watch progress in the dashboard
-- Check .ralph/features/auth-system/progress.txt for details
+- Check .ralph/features/progress.txt for details
 - Ctrl+C to stop the loop
 ```
 
@@ -82,16 +83,17 @@ Ralph is now working autonomously. You can:
 When auto-selecting, Ralph uses Claude to analyze `.ralph/features.json` and select:
 
 1. **Resume in-progress first**: Any feature with `status: "in_progress"`
-2. **Start pending next**: First feature with `status: "pending"`
-3. **Skip completed**: Features with `status: "completed"` are done
-4. **Consider blockers**: High failure rates may be skipped
+2. **Check dependencies**: Skip features whose dependencies aren't completed
+3. **Start pending next**: First non-blocked feature with `status: "pending"`
+4. **Skip completed**: Features with `status: "completed"` are done
+5. **Consider blockers**: High failure rates may be skipped
 
 ## Examples
 
 ```
 /ralph:start
 ```
-Auto-selects the best feature to work on and starts the loop.
+Auto-selects the best feature (respecting dependencies) and starts the loop.
 
 ```
 /ralph:start auth-system
@@ -100,7 +102,8 @@ Starts the loop for the `auth-system` feature specifically.
 
 ## Notes
 
-- The loop runs until all stories pass or max iterations is reached
-- Progress is saved after each iteration
-- Failed stories are retried up to 3 times before being skipped
-- A PR is created automatically when all stories complete
+- The loop runs until all tasks pass or max iterations is reached
+- Progress is saved to cumulative `progress.txt` after each iteration
+- Failed tasks are retried up to 3 times before being skipped
+- A PR is created automatically when all tasks complete
+- Features are stored as flat `*.prd.json` files in `.ralph/features/`
