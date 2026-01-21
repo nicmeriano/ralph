@@ -170,9 +170,15 @@ build_features_index() {
 
     local features_array="[]"
 
+    # Use nullglob to handle empty directories gracefully
+    shopt -s nullglob
     for dir in "$features_dir"/*/; do
         if [[ -d "$dir" ]] && [[ -f "$dir/prd.json" ]]; then
             local name=$(basename "$dir")
+            # Skip if name is empty or just whitespace
+            if [[ -z "$name" ]] || [[ "$name" == "*" ]]; then
+                continue
+            fi
             local prd_file="$dir/prd.json"
 
             # Read feature info from prd.json
@@ -209,6 +215,7 @@ build_features_index() {
             features_array=$(echo "$features_array" | jq --argjson entry "$feature_entry" '. + [$entry]')
         fi
     done
+    shopt -u nullglob
 
     # Write index file
     echo "{\"features\": $features_array}" | jq '.' > "$index_file"
@@ -411,7 +418,21 @@ stop_dashboard() {
 # Generate prompt from template
 generate_prompt() {
     local feature="$1"
+
+    # Validate feature name is not empty
+    if [[ -z "$feature" ]]; then
+        log_error "generate_prompt called with empty feature name"
+        exit 1
+    fi
+
     local prd_file="$SCRIPT_DIR/features/$feature/prd.json"
+
+    # Validate PRD file exists
+    if [[ ! -f "$prd_file" ]]; then
+        log_error "PRD file not found: $prd_file"
+        exit 1
+    fi
+
     local branch_name=$(jq -r '.branchName // "ralph/'"$feature"'"' "$prd_file")
 
     local prompt=$(cat "$PROMPT_TEMPLATE")
@@ -563,7 +584,11 @@ main() {
     echo -e "${BOLD}╚═══════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  Feature:     ${CYAN}$FEATURE_NAME${NC}"
-    echo -e "  Mode:        ${RUN_ONCE:+Single iteration}${RUN_ONCE:-Loop (max $max_iter iterations)}"
+    if [[ "$RUN_ONCE" == "true" ]]; then
+        echo -e "  Mode:        Single iteration"
+    else
+        echo -e "  Mode:        Loop (max $max_iter iterations)"
+    fi
     echo -e "  Sandbox:     ${SANDBOX}"
     echo ""
 
