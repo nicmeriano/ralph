@@ -1,0 +1,29 @@
+{
+  "feature": "{{FEATURE_NAME}}",
+  "branchName": "ralph/{{FEATURE_NAME}}",
+  "description": "Feature description goes here",
+  "createdAt": "{{CREATED_AT}}",
+  "updatedAt": "{{CREATED_AT}}",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Story title",
+      "description": "As a [user type], I want [goal] so that [benefit]",
+      "category": "core",
+      "acceptanceCriteria": [
+        "Criterion 1",
+        "Criterion 2"
+      ],
+      "passes": false,
+      "status": "pending",
+      "notes": "",
+      "completedAt": null
+    }
+  ],
+  "metadata": {
+    "totalStories": 1,
+    "completedStories": 0,
+    "currentIteration": 0,
+    "maxIterations": 2
+  }
+}

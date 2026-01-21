@@ -1,0 +1,15 @@
+# {{FEATURE_NAME}} - Progress Log
+
+## Codebase Patterns
+<!--
+Add discovered patterns here as you work.
+Future iterations should read this section FIRST.
+-->
+
+- (No patterns discovered yet)
+
+---
+
+## Activity Log
+
+<!-- Each iteration adds an entry below -->
