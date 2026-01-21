@@ -59,9 +59,10 @@ Generate PRDs using this exact schema:
 
 ```json
 {
-  "feature": "feature-name",
+  "name": "feature-name",
   "branchName": "ralph/feature-name",
   "description": "High-level feature description",
+  "dependencies": [],
   "createdAt": "2026-01-20T10:00:00Z",
   "updatedAt": "2026-01-20T10:00:00Z",
   "userStories": [
@@ -77,15 +78,38 @@ Generate PRDs using this exact schema:
       "passes": false,
       "status": "pending",
       "notes": "",
+      "failureCount": 0,
+      "lastFailureReason": "",
       "completedAt": null
     }
   ],
   "metadata": {
     "totalStories": 5,
     "completedStories": 0,
+    "failedStories": 0,
     "currentIteration": 0,
     "maxIterations": 8
   }
+}
+```
+
+## Features Index Schema
+
+Also generate/update `.ralph/features.json`:
+
+```json
+{
+  "features": [
+    {
+      "name": "feature-name",
+      "description": "Feature description",
+      "status": "pending|in_progress|completed",
+      "dependencies": [],
+      "storyCount": 5,
+      "completedCount": 0,
+      "failedCount": 0
+    }
+  ]
 }
 ```
 
@@ -112,6 +136,8 @@ When `/ralph-features` is invoked:
    .ralph/features/<feature-name>/
    ├── prd.json        # Generated PRD
    └── progress.txt    # Empty progress log
+
+   .ralph/features.json  # Updated feature index
    ```
 
 6. **Report Results**:
@@ -127,11 +153,29 @@ When `/ralph-features` is invoked:
       - 3 user stories
       - Categories: ui, logic
       - Estimated iterations: 5
-
-   Next steps:
-     ralph auth-system        # Start the auth-system loop
-     ralph dashboard --once   # Run single iteration
    ```
+
+7. **Offer to Start Loop**:
+
+   After generating features, **always offer to start the Ralph loop immediately**:
+
+   ```
+   Would you like to start the Ralph loop now?
+
+   Available features:
+     1. auth-system (5 stories) - No dependencies
+     2. dashboard (3 stories) - Depends on: auth-system
+
+   Options:
+     • ralph start              - Auto-select based on dependencies
+     • ralph start --feature auth-system  - Start specific feature
+     • Skip for now            - Just generate files
+   ```
+
+   If the user chooses to start:
+   - Execute `.ralph/ralph.sh start` or `.ralph/ralph.sh start --feature <name>` directly
+   - This runs the loop within the current Claude session
+   - No need to exit Claude and run manually
 
 ## Example Transformation
 
@@ -155,9 +199,10 @@ Implement login endpoint.
 **Output PRD:**
 ```json
 {
-  "feature": "authentication",
+  "name": "authentication",
   "branchName": "ralph/authentication",
   "description": "User authentication system with login functionality",
+  "dependencies": [],
   "userStories": [
     {
       "id": "US-001",
@@ -170,7 +215,9 @@ Implement login endpoint.
         "Email validation is enforced"
       ],
       "passes": false,
-      "status": "pending"
+      "status": "pending",
+      "failureCount": 0,
+      "lastFailureReason": ""
     },
     {
       "id": "US-002",
@@ -183,7 +230,9 @@ Implement login endpoint.
         "Invalid credentials return 401 error"
       ],
       "passes": false,
-      "status": "pending"
+      "status": "pending",
+      "failureCount": 0,
+      "lastFailureReason": ""
     }
   ]
 }
@@ -195,3 +244,16 @@ Implement login endpoint.
 - Generate `progress.txt` from template with feature name
 - Calculate `maxIterations` as `totalStories * 1.5`
 - Timestamp format: ISO 8601 (e.g., `2026-01-20T10:00:00Z`)
+- **Always offer to start the loop** after generating - this is the smoother workflow
+- The `dependencies` field allows Ralph to auto-select features in the correct order
+
+## Browser Testing Note
+
+If any stories have `category: "ui"`, mention that browser testing is available:
+
+```
+Note: UI stories detected. To enable browser testing:
+1. Install dev-browser: https://github.com/SawyerHood/dev-browser
+2. Set browserTesting.enabled = true in .ralph/config.json
+3. Configure devServerCommand and devServerPort
+```

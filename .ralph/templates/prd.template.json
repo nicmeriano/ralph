@@ -1,5 +1,5 @@
 {
-  "feature": "{{FEATURE_NAME}}",
+  "name": "{{FEATURE_NAME}}",
   "branchName": "ralph/{{FEATURE_NAME}}",
   "description": "Feature description goes here",
   "createdAt": "{{CREATED_AT}}",
@@ -17,12 +17,15 @@
       "passes": false,
       "status": "pending",
       "notes": "",
+      "failureCount": 0,
+      "lastFailureReason": "",
       "completedAt": null
     }
   ],
   "metadata": {
     "totalStories": 1,
     "completedStories": 0,
+    "failedStories": 0,
     "currentIteration": 0,
     "maxIterations": 2
   }

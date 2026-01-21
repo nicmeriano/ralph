@@ -11,6 +11,7 @@
             --ralph-success: #22c55e;
             --ralph-warning: #eab308;
             --ralph-danger: #ef4444;
+            --ralph-failed: #dc2626;
             --ralph-muted: #71717a;
         }
 
@@ -160,6 +161,11 @@
             opacity: 0.8;
         }
 
+        .story-card.failed {
+            border-color: var(--ralph-failed);
+            background: rgba(220, 38, 38, 0.05);
+        }
+
         .story-header {
             display: flex;
             justify-content: space-between;
@@ -211,6 +217,11 @@
 
         .badge-done {
             background: var(--ralph-success);
+            color: white;
+        }
+
+        .badge-failed {
+            background: var(--ralph-failed);
             color: white;
         }
 
@@ -393,6 +404,7 @@
             const stories = prd.userStories || [];
             const total = stories.length;
             const completed = stories.filter(s => s.passes).length;
+            const failed = stories.filter(s => s.status === 'failed').length;
             const inProgress = stories.find(s => s.status === 'in_progress');
             const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
             const currentIter = prd.metadata?.currentIteration || 0;
@@ -408,6 +420,10 @@
                         <div class="stat-value" style="color: var(--ralph-success);">${completed}/${total}</div>
                     </div>
                     <div class="stat-card">
+                        <div class="stat-label">Failed Stories</div>
+                        <div class="stat-value" style="color: ${failed > 0 ? 'var(--ralph-failed)' : 'var(--muted-foreground)'};">${failed}</div>
+                    </div>
+                    <div class="stat-card">
                         <div class="stat-label">Current Iteration</div>
                         <div class="stat-value">${currentIter}/${maxIter}</div>
                     </div>
@@ -417,8 +433,8 @@
                     </div>
                     <div class="stat-card">
                         <div class="stat-label">Status</div>
-                        <div class="stat-value" style="font-size: 1.25rem; color: ${completed === total ? 'var(--ralph-success)' : 'var(--ralph-primary)'}">
-                            ${completed === total ? '✅ Complete' : '🔄 In Progress'}
+                        <div class="stat-value" style="font-size: 1.25rem; color: ${completed === total ? 'var(--ralph-success)' : failed > 0 ? 'var(--ralph-warning)' : 'var(--ralph-primary)'}">
+                            ${completed === total ? '✅ Complete' : failed > 0 ? '⚠️ Has Failures' : '🔄 In Progress'}
                         </div>
                     </div>
                 </div>
@@ -479,6 +495,11 @@
                                     <strong>Notes:</strong> ${story.notes}
                                 </div>
                             ` : ''}
+                            ${story.status === 'failed' && story.lastFailureReason ? `
+                                <div style="margin-top: 0.75rem; padding: 0.75rem; background: rgba(220, 38, 38, 0.1); border: 1px solid var(--ralph-failed); border-radius: 8px; font-size: 0.875rem;">
+                                    <strong style="color: var(--ralph-failed);">❌ Last Failure (attempt ${story.failureCount || 1}):</strong> ${story.lastFailureReason}
+                                </div>
+                            ` : ''}
                             ${story.completedAt ? `
                                 <div style="margin-top: 0.5rem; font-size: 0.75rem; color: var(--muted-foreground);">
                                     Completed: ${new Date(story.completedAt).toLocaleString()}
@@ -500,7 +521,8 @@
             const labels = {
                 'pending': '⏳ Pending',
                 'in_progress': '🔄 In Progress',
-                'done': '✅ Done'
+                'done': '✅ Done',
+                'failed': '❌ Failed'
             };
             return labels[status] || status;
         }

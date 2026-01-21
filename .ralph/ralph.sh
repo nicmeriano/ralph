@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="$SCRIPT_DIR/config.json"
 PROMPT_TEMPLATE="$SCRIPT_DIR/prompt.md"
+FEATURES_INDEX="$SCRIPT_DIR/features.json"
 
 # Colors
 RED='\033[0;31m'
@@ -29,6 +30,7 @@ CREATE_PR_ON_COMPLETION=true
 RUN_ONCE=false
 MAX_ITERATIONS=""
 DASHBOARD_PID=""
+AUTO_SELECT_FEATURE=false
 
 # ============================================================================
 # Helper Functions
@@ -66,9 +68,20 @@ load_config() {
 # Parse command line arguments
 parse_args() {
     FEATURE_NAME=""
+    COMMAND=""
 
     while [[ $# -gt 0 ]]; do
         case $1 in
+            start)
+                COMMAND="start"
+                AUTO_SELECT_FEATURE=true
+                shift
+                ;;
+            --feature)
+                FEATURE_NAME="$2"
+                AUTO_SELECT_FEATURE=false
+                shift 2
+                ;;
             --once)
                 RUN_ONCE=true
                 shift
@@ -116,9 +129,15 @@ show_help() {
 ${BOLD}Ralph 2.0 - Autonomous Development Loop${NC}
 
 ${BOLD}Usage:${NC}
-    ralph <feature-name> [options]
+    ralph start [options]               Auto-select feature and run loop
+    ralph start --feature <name>        Run loop for specific feature
+    ralph <feature-name> [options]      Run loop for feature (legacy)
+
+${BOLD}Commands:${NC}
+    start           Auto-select a feature based on dependencies and run
 
 ${BOLD}Options:${NC}
+    --feature <name>        Lock to specific feature (with start command)
     --once                  Run single iteration only
     --max-iterations N      Set maximum iterations (default: stories * 1.5)
     --port N                Dashboard port (default: 3456)
@@ -127,15 +146,142 @@ ${BOLD}Options:${NC}
     -h, --help              Show this help message
 
 ${BOLD}Examples:${NC}
-    ralph auth-feature              # Run loop for auth-feature
-    ralph auth-feature --once       # Single iteration
+    ralph start                         # Auto-select feature and run
+    ralph start --feature auth-system   # Run specific feature
+    ralph auth-feature                  # Legacy: run auth-feature
+    ralph auth-feature --once           # Single iteration
     ralph auth-feature --max-iterations 15
-    ralph auth-feature --sandbox false
 
 ${BOLD}Configuration:${NC}
     All options can be set in .ralph/config.json
     CLI arguments override config values
 EOF
+}
+
+# Build or update features.json index
+build_features_index() {
+    local features_dir="$SCRIPT_DIR/features"
+    local index_file="$FEATURES_INDEX"
+
+    if [[ ! -d "$features_dir" ]]; then
+        log_error "No features directory found"
+        exit 1
+    fi
+
+    local features_array="[]"
+
+    for dir in "$features_dir"/*/; do
+        if [[ -d "$dir" ]] && [[ -f "$dir/prd.json" ]]; then
+            local name=$(basename "$dir")
+            local prd_file="$dir/prd.json"
+
+            # Read feature info from prd.json
+            local description=$(jq -r '.description // ""' "$prd_file")
+            local story_count=$(jq '.userStories | length' "$prd_file")
+            local completed_count=$(jq '[.userStories[] | select(.passes == true)] | length' "$prd_file")
+            local failed_count=$(jq '[.userStories[] | select(.status == "failed")] | length' "$prd_file")
+            local dependencies=$(jq -r '.dependencies // []' "$prd_file")
+
+            # Determine status
+            local status="pending"
+            if [[ "$completed_count" -eq "$story_count" ]]; then
+                status="completed"
+            elif [[ "$completed_count" -gt 0 ]] || [[ $(jq '[.userStories[] | select(.status == "in_progress")] | length' "$prd_file") -gt 0 ]]; then
+                status="in_progress"
+            fi
+
+            # Build feature entry
+            local feature_entry=$(jq -n \
+                --arg name "$name" \
+                --arg description "$description" \
+                --arg status "$status" \
+                --argjson dependencies "$dependencies" \
+                --argjson storyCount "$story_count" \
+                --argjson completedCount "$completed_count" \
+                --argjson failedCount "$failed_count" \
+                '{
+                    name: $name,
+                    description: $description,
+                    status: $status,
+                    dependencies: $dependencies,
+                    storyCount: $storyCount,
+                    completedCount: $completedCount,
+                    failedCount: $failedCount
+                }')
+
+            features_array=$(echo "$features_array" | jq --argjson entry "$feature_entry" '. + [$entry]')
+        fi
+    done
+
+    # Write index file
+    echo "{\"features\": $features_array}" | jq '.' > "$index_file"
+}
+
+# Auto-select feature based on dependencies and status
+auto_select_feature() {
+    build_features_index
+
+    if [[ ! -f "$FEATURES_INDEX" ]]; then
+        log_error "Could not build features index"
+        exit 1
+    fi
+
+    # Get all non-completed features
+    local candidates=$(jq -r '.features[] | select(.status != "completed") | .name' "$FEATURES_INDEX")
+
+    if [[ -z "$candidates" ]]; then
+        log_success "All features are complete!"
+        exit 0
+    fi
+
+    # Find a feature whose dependencies are all completed
+    for feature in $candidates; do
+        local deps=$(jq -r --arg name "$feature" '.features[] | select(.name == $name) | .dependencies[]?' "$FEATURES_INDEX")
+        local all_deps_met=true
+
+        if [[ -n "$deps" ]]; then
+            for dep in $deps; do
+                local dep_status=$(jq -r --arg name "$dep" '.features[] | select(.name == $name) | .status' "$FEATURES_INDEX")
+                if [[ "$dep_status" != "completed" ]]; then
+                    all_deps_met=false
+                    break
+                fi
+            done
+        fi
+
+        if [[ "$all_deps_met" == "true" ]]; then
+            # Prefer in_progress features, then pending
+            local status=$(jq -r --arg name "$feature" '.features[] | select(.name == $name) | .status' "$FEATURES_INDEX")
+            if [[ "$status" == "in_progress" ]]; then
+                echo "$feature"
+                return
+            fi
+        fi
+    done
+
+    # If no in_progress feature with met dependencies, pick first pending with met deps
+    for feature in $candidates; do
+        local deps=$(jq -r --arg name "$feature" '.features[] | select(.name == $name) | .dependencies[]?' "$FEATURES_INDEX")
+        local all_deps_met=true
+
+        if [[ -n "$deps" ]]; then
+            for dep in $deps; do
+                local dep_status=$(jq -r --arg name "$dep" '.features[] | select(.name == $name) | .status' "$FEATURES_INDEX")
+                if [[ "$dep_status" != "completed" ]]; then
+                    all_deps_met=false
+                    break
+                fi
+            done
+        fi
+
+        if [[ "$all_deps_met" == "true" ]]; then
+            echo "$feature"
+            return
+        fi
+    done
+
+    # Fallback: just pick the first non-completed feature
+    echo "$candidates" | head -1
 }
 
 # Validate feature exists
@@ -173,6 +319,12 @@ get_completed_count() {
     jq '[.userStories[] | select(.passes == true)] | length' "$prd_file"
 }
 
+# Get failed story count
+get_failed_count() {
+    local prd_file="$1"
+    jq '[.userStories[] | select(.status == "failed")] | length' "$prd_file"
+}
+
 # Calculate max iterations
 calculate_max_iterations() {
     local prd_file="$1"
@@ -202,6 +354,7 @@ show_progress() {
 
     local total=$(get_story_count "$prd_file")
     local completed=$(get_completed_count "$prd_file")
+    local failed=$(get_failed_count "$prd_file")
     local percent=0
 
     if [[ "$total" -gt 0 ]]; then
@@ -224,6 +377,9 @@ show_progress() {
     echo -e "${CYAN}  Ralph Loop Progress${NC}"
     echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "  Stories:    ${GREEN}$completed${NC}/$total completed"
+    if [[ "$failed" -gt 0 ]]; then
+        echo -e "  Failed:     ${RED}$failed${NC} stories"
+    fi
     echo -e "  Iteration:  $iteration/$max_iter"
     echo -e "  Progress:   [${GREEN}$bar${NC}] $percent%"
     if [[ -n "$current_story" ]]; then
@@ -321,6 +477,12 @@ run_iteration() {
         return 0  # All done
     fi
 
+    # Check for branch error
+    if echo "$output" | grep -q '<promise>BRANCH_ERROR</promise>'; then
+        log_error "Branch verification failed"
+        return 2
+    fi
+
     return 1  # Continue loop
 }
 
@@ -352,7 +514,10 @@ create_pr() {
 $description
 
 ## Stories Completed
-$(jq -r '.userStories[] | "- [x] " + .id + ": " + .title' "$prd_file")
+$(jq -r '.userStories[] | select(.passes == true) | "- [x] " + .id + ": " + .title' "$prd_file")
+
+## Failed Stories
+$(jq -r '.userStories[] | select(.status == "failed") | "- [ ] " + .id + ": " + .title + " (failed " + (.failureCount | tostring) + " times)"' "$prd_file")
 
 ---
 🤖 Generated by Ralph Loop" \
@@ -387,6 +552,17 @@ main() {
 
     # Parse CLI args (overrides config)
     parse_args "$@"
+
+    # Handle start command with auto-selection
+    if [[ "$COMMAND" == "start" ]] && [[ "$AUTO_SELECT_FEATURE" == "true" ]] && [[ -z "$FEATURE_NAME" ]]; then
+        log_info "Auto-selecting feature..."
+        FEATURE_NAME=$(auto_select_feature)
+        if [[ -z "$FEATURE_NAME" ]]; then
+            log_error "No eligible features found"
+            exit 1
+        fi
+        log_success "Selected feature: $FEATURE_NAME"
+    fi
 
     # Validate feature name provided
     if [[ -z "$FEATURE_NAME" ]]; then
@@ -451,9 +627,15 @@ main() {
 
             update_iteration_count "$prd_file" "$iteration"
 
-            if run_iteration "$FEATURE_NAME" "$iteration"; then
+            local result=0
+            run_iteration "$FEATURE_NAME" "$iteration" || result=$?
+
+            if [[ $result -eq 0 ]]; then
                 log_success "Feature complete! All stories passing."
                 create_pr "$FEATURE_NAME"
+                break
+            elif [[ $result -eq 2 ]]; then
+                log_error "Stopping due to branch error"
                 break
             fi
 
@@ -464,12 +646,16 @@ main() {
             log_warn "Max iterations ($max_iter) reached"
             local completed=$(get_completed_count "$prd_file")
             local total=$(get_story_count "$prd_file")
-            log_info "Progress: $completed/$total stories completed"
+            local failed=$(get_failed_count "$prd_file")
+            log_info "Progress: $completed/$total stories completed, $failed failed"
         fi
     fi
 
     # Final progress
     show_progress "$prd_file" "$iteration" "$max_iter"
+
+    # Update features index
+    build_features_index
 
     log_success "Ralph loop finished"
 }

@@ -12,5 +12,11 @@
     "typecheck": "npm run typecheck",
     "lint": "npm run lint"
   },
-  "createPROnCompletion": true
+  "createPROnCompletion": true,
+  "browserTesting": {
+    "enabled": false,
+    "devServerCommand": "npm run dev",
+    "devServerPort": 3000,
+    "waitForServerMs": 5000
+  }
 }
